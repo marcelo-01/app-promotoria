@@ -27,7 +27,13 @@
     <q-list v-else separator class="rounded-borders bg-white">
       <q-item v-for="v in enviadas" :key="v.id">
         <q-item-section>
-          <q-item-label>{{ v.customer_name }}</q-item-label>
+          <q-item-label>
+            {{ v.customer_name }}
+            <q-chip dense square outline size="sm"
+                    :color="v.visit_type === 'gondola' ? 'primary' : 'teal-8'">
+              {{ v.visit_type === 'gondola' ? 'Gôndola' : 'Estoque' }}
+            </q-chip>
+          </q-item-label>
           <q-item-label caption>
             {{ formatData(v.visited_at) }} · {{ v.items_count }} itens
           </q-item-label>

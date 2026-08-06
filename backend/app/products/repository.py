@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.product import Product
@@ -27,14 +27,7 @@ class ProductsRepository:
             base = base.where(Product.is_active.is_(True))
 
         if search:
-            like = f"%{search.strip()}%"
-            base = base.where(
-                or_(
-                    Product.name.ilike(like),
-                    Product.sku.ilike(like),
-                    Product.barcode.ilike(like),
-                )
-            )
+            base = base.where(Product.name.ilike(f"%{search.strip()}%"))
 
         total = (
             await session.execute(select(func.count()).select_from(base.subquery()))
@@ -53,13 +46,6 @@ class ProductsRepository:
         query = select(Product).where(
             Product.tenant_id == tenant_id, Product.id == product_id
         )
-        return (await session.execute(query)).scalars().first()
-
-    @staticmethod
-    async def get_by_sku(
-        session: AsyncSession, tenant_id: UUID, sku: str
-    ) -> Optional[Product]:
-        query = select(Product).where(Product.tenant_id == tenant_id, Product.sku == sku)
         return (await session.execute(query)).scalars().first()
 
     @staticmethod

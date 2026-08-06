@@ -44,6 +44,18 @@ export default defineConfig({
               networkTimeoutSeconds: 5,
             },
           },
+          {
+            // Foto do produto: uma vez baixada não muda mais (o nome do arquivo
+            // é trocado a cada upload), então cache primeiro — é o que garante a
+            // tela de contagem funcionando dentro do mercado, sem sinal.
+            urlPattern: ({ url }) => url.pathname.includes('/uploads/products/'),
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'produto-fotos',
+              expiration: { maxEntries: 400, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              cacheableResponse: { statuses: [0, 200] },
+            },
+          },
         ],
       },
     }),

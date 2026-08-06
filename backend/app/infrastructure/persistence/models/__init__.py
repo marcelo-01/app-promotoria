@@ -9,4 +9,6 @@ from app.infrastructure.persistence.models.stock_visit import (  # noqa: F401
     StockVisit,
     StockVisitItem,
     StockVisitStatus,
+    UnitType,
+    VisitType,
 )

@@ -53,7 +53,6 @@
             </q-item-section>
             <q-item-section>
               <q-item-label>{{ c.name }}</q-item-label>
-              <q-item-label caption>{{ c.document || 'sem documento' }}</q-item-label>
             </q-item-section>
           </q-item>
         </q-list>
@@ -81,9 +80,7 @@ const salvando = ref(false)
 const filtrados = computed(() => {
   const term = busca.value?.trim().toLowerCase()
   if (!term) return clientes.value
-  return clientes.value.filter(
-    (c) => c.name.toLowerCase().includes(term) || (c.document || '').includes(term)
-  )
+  return clientes.value.filter((c) => c.name.toLowerCase().includes(term))
 })
 
 async function selecionar(promotor) {

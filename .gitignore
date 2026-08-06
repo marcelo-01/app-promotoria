@@ -11,3 +11,6 @@ dev-dist/
 htmlcov/
 .pytest_cache/
 .coverage
+
+# Fotos de produto enviadas pelo administrador
+backend/uploads/

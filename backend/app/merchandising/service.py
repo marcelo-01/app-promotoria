@@ -7,14 +7,15 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.customers.service import CustomersService
 from app.infrastructure.persistence.models.stock_visit import (
-    StockVisit, StockVisitItem, StockVisitStatus,
+    StockVisit, StockVisitItem, StockVisitStatus, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    CountProductResponse, PromoterCustomerResponse, StockVisitCreate,
-    StockVisitItemResponse, StockVisitResponse,
+    CountProductResponse, CountSheetResponse, PromoterCustomerResponse,
+    StockVisitCreate, StockVisitItemResponse, StockVisitResponse,
 )
 
 
@@ -32,58 +33,61 @@ class MerchandisingService:
     ) -> list[PromoterCustomerResponse]:
         # Admin enxerga todos; promotor só os seus
         scope_user_id = None if _is_admin(user) else user.id
-        rows = await Repo.list_customers_for_promoter(session, tenant_id, scope_user_id, search)
+        customers = await Repo.list_customers_for_promoter(
+            session, tenant_id, scope_user_id, search
+        )
+        last_visits = await Repo.last_visit_by_customer_and_type(session, tenant_id)
 
         return [
             PromoterCustomerResponse(
                 id=customer.id,
                 name=customer.name,
-                corporate_name=customer.corporate_name,
-                document=customer.document,
-                phone=customer.phone,
-                address=customer.address,
-                customer_type=customer.customer_type,
-                last_visited_at=last_visited_at,
-                has_draft=bool(draft_count),
+                last_gondola_at=last_visits.get((customer.id, VisitType.GONDOLA.value)),
+                last_estoque_at=last_visits.get((customer.id, VisitType.ESTOQUE.value)),
             )
-            for customer, last_visited_at, draft_count in rows
+            for customer in customers
         ]
 
-    # ── Promotor: produtos para contar ────────────────────────────────────
+    # ── Promotor: folha de contagem ───────────────────────────────────────
 
     @staticmethod
-    async def list_products_for_customer(
+    async def count_sheet(
         session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
-        search: Optional[str] = None,
-    ) -> list[CountProductResponse]:
-        await MerchandisingService._assert_can_access_customer(session, tenant_id, user, customer_id)
+        visit_type: str,
+    ) -> CountSheetResponse:
+        """Cliente + produtos + contagem anterior: tudo numa resposta só."""
+        await MerchandisingService._assert_can_access_customer(
+            session, tenant_id, user, customer_id
+        )
 
-        last_qty = await Repo.last_quantities_for_customer(session, tenant_id, customer_id)
+        customer = await CustomersService.get(session, tenant_id, customer_id)
+        last = await Repo.last_quantities_for_customer(
+            session, tenant_id, customer_id, visit_type
+        )
 
         mix = await Repo.list_mix_products(session, tenant_id, customer_id)
         if mix:
             products = [(p, position) for p, position in mix]
         else:
             # Sem mix cadastrado: cai no catálogo completo
-            products = [(p, 0) for p in await Repo.list_all_products(session, tenant_id, search)]
+            products = [(p, 0) for p in await Repo.list_all_products(session, tenant_id)]
 
-        if search and mix:
-            term = search.strip().lower()
-            products = [
-                (p, pos) for p, pos in products
-                if term in p.name.lower()
-                or term in (p.sku or "").lower()
-                or term in (p.barcode or "").lower()
-            ]
-
-        return [
-            CountProductResponse(
-                id=p.id, sku=p.sku, barcode=p.barcode, name=p.name, unit=p.unit,
-                package_size=p.package_size, image_url=p.image_url,
-                position=position, last_quantity=last_qty.get(p.id),
-            )
-            for p, position in products
-        ]
+        return CountSheetResponse(
+            customer_id=customer.id,
+            customer_name=customer.name,
+            visit_type=visit_type,
+            products=[
+                CountProductResponse(
+                    id=p.id,
+                    name=p.name,
+                    image_url=p.image_url,
+                    position=position,
+                    last_quantity=last.get(p.id, (None, None))[0],
+                    last_unit_type=last.get(p.id, (None, None))[1],
+                )
+                for p, position in products
+            ],
+        )
 
     # ── Promotor: gravar contagem ─────────────────────────────────────────
 
@@ -108,6 +112,7 @@ class MerchandisingService:
                 tenant_id=tenant_id,
                 customer_id=payload.customer_id,
                 promoter_id=user.id,
+                visit_type=payload.visit_type,
                 client_uuid=payload.client_uuid,
                 status=StockVisitStatus.DRAFT.value,
                 visited_at=payload.visited_at or now,
@@ -123,9 +128,8 @@ class MerchandisingService:
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Esta contagem pertence a outro promotor.",
                 )
+            visit.visit_type = payload.visit_type
             visit.visited_at = payload.visited_at or visit.visited_at or now
-
-        visit.notes = payload.notes
 
         if payload.submit:
             visit.status = StockVisitStatus.SUBMITTED.value
@@ -140,8 +144,7 @@ class MerchandisingService:
                 visit_id=visit.id,
                 product_id=item.product_id,
                 quantity=item.quantity,
-                expires_at=item.expires_at,
-                notes=item.notes,
+                unit_type=item.unit_type,
             )
             for item in payload.items
         ]
@@ -174,23 +177,23 @@ class MerchandisingService:
         if not row:
             raise HTTPException(status_code=404, detail="Contagem não encontrada")
 
-        visit, customer_name, customer_document, promoter_name = row
+        visit, customer_name, promoter_name = row
 
         item_rows = await Repo.list_items(session, visit.id)
         items = [
             StockVisitItemResponse(
-                id=item.id, product_id=item.product_id, product_sku=sku,
-                product_name=name, product_unit=unit, quantity=item.quantity,
+                id=item.id, product_id=item.product_id, product_name=name,
+                quantity=item.quantity, unit_type=item.unit_type,
                 expires_at=item.expires_at, notes=item.notes,
             )
-            for item, sku, name, unit in item_rows
+            for item, name in item_rows
         ]
 
         return StockVisitResponse(
             id=visit.id, tenant_id=visit.tenant_id, customer_id=visit.customer_id,
-            customer_name=customer_name, customer_document=customer_document,
+            customer_name=customer_name,
             promoter_id=visit.promoter_id, promoter_name=promoter_name,
-            status=visit.status, visited_at=visit.visited_at,
+            visit_type=visit.visit_type, status=visit.status, visited_at=visit.visited_at,
             submitted_at=visit.submitted_at, exported_at=visit.exported_at,
             notes=visit.notes, client_uuid=visit.client_uuid,
             items=items, items_count=len(items),
@@ -205,14 +208,15 @@ class MerchandisingService:
         visits = [
             StockVisitResponse(
                 id=v.id, tenant_id=v.tenant_id, customer_id=v.customer_id,
-                customer_name=c_name, customer_document=c_document,
+                customer_name=c_name,
                 promoter_id=v.promoter_id, promoter_name=p_name,
-                status=v.status, visited_at=v.visited_at, submitted_at=v.submitted_at,
-                exported_at=v.exported_at, notes=v.notes, client_uuid=v.client_uuid,
+                visit_type=v.visit_type, status=v.status, visited_at=v.visited_at,
+                submitted_at=v.submitted_at, exported_at=v.exported_at,
+                notes=v.notes, client_uuid=v.client_uuid,
                 items=[], items_count=count,
                 created_at=v.created_at, updated_at=v.updated_at,
             )
-            for v, c_name, c_document, p_name, count in rows
+            for v, c_name, p_name, count in rows
         ]
         return visits, total
 

@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.product import Product
+from app.products import images
 from app.products.repository import ProductsRepository as Repo
 from app.products.schemas import ProductCreate, ProductUpdate
 
@@ -35,13 +36,7 @@ class ProductsService:
     async def create(
         session: AsyncSession, tenant_id: UUID, payload: ProductCreate
     ) -> Product:
-        existing = await Repo.get_by_sku(session, tenant_id, payload.sku)
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=f"Já existe um produto com o SKU {payload.sku}",
-            )
-        product = Product(id=uuid4(), tenant_id=tenant_id, **payload.model_dump())
+        product = Product(id=uuid4(), tenant_id=tenant_id, name=payload.name)
         return await Repo.save(session, product)
 
     @staticmethod
@@ -50,18 +45,42 @@ class ProductsService:
     ) -> Product:
         product = await ProductsService.get(session, tenant_id, product_id)
 
-        data = payload.model_dump(exclude_unset=True)
-
-        sku = data.get("sku")
-        if sku and sku != product.sku:
-            existing = await Repo.get_by_sku(session, tenant_id, sku)
-            if existing and existing.id != product.id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Já existe um produto com o SKU {sku}",
-                )
-
-        for key, value in data.items():
-            setattr(product, key, value)
+        for key, value in payload.model_dump(exclude_unset=True).items():
+            if value is not None:
+                setattr(product, key, value)
 
         return await Repo.save(session, product)
+
+    # ── Foto ──────────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def set_image(
+        session: AsyncSession,
+        tenant_id: UUID,
+        product_id: UUID,
+        raw: bytes,
+        content_type: Optional[str],
+    ) -> Product:
+        product = await ProductsService.get(session, tenant_id, product_id)
+        anterior = product.image_url
+
+        product.image_url = images.save_product_image(product_id, raw, content_type)
+        product = await Repo.save(session, product)
+
+        # Só depois de gravar o novo caminho: se o banco falhar, a foto antiga
+        # continua valendo.
+        images.delete_product_image(anterior)
+        return product
+
+    @staticmethod
+    async def remove_image(
+        session: AsyncSession, tenant_id: UUID, product_id: UUID
+    ) -> Product:
+        product = await ProductsService.get(session, tenant_id, product_id)
+        anterior = product.image_url
+
+        product.image_url = None
+        product = await Repo.save(session, product)
+
+        images.delete_product_image(anterior)
+        return product

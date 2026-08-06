@@ -3,7 +3,9 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.infrastructure.persistence.models.stock_visit import UnitType, VisitType
 
 # ─── Clientes do promotor ─────────────────────────────────────────────────────
 
@@ -11,14 +13,9 @@ from pydantic import BaseModel, Field
 class PromoterCustomerResponse(BaseModel):
     id: UUID
     name: str
-    corporate_name: Optional[str] = None
-    document: Optional[str] = None
-    phone: Optional[str] = None
-    address: Optional[dict] = None
-    customer_type: Optional[str] = None
-    # Para o promotor saber onde já passou
-    last_visited_at: Optional[datetime] = None
-    has_draft: bool = False
+    # Uma data por tipo: o promotor decide onde precisa passar olhando o card
+    last_gondola_at: Optional[datetime] = None
+    last_estoque_at: Optional[datetime] = None
 
     model_config = {"from_attributes": True}
 
@@ -28,17 +25,24 @@ class PromoterCustomerResponse(BaseModel):
 
 class CountProductResponse(BaseModel):
     id: UUID
-    sku: str
-    barcode: Optional[str] = None
     name: str
-    unit: str
-    package_size: Optional[Decimal] = None
     image_url: Optional[str] = None
     position: int = 0
-    # Contagem da visita anterior nesse cliente — âncora mental para o promotor
+    # Contagem anterior NO MESMO TIPO — âncora mental para o promotor
     last_quantity: Optional[Decimal] = None
+    last_unit_type: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+class CountSheetResponse(BaseModel):
+    """Tudo que a tela de contagem precisa, numa requisição só — é a única
+    chamada que o promotor faz ao entrar na loja, muitas vezes com sinal ruim."""
+
+    customer_id: UUID
+    customer_name: str
+    visit_type: str
+    products: List[CountProductResponse] = []
 
 
 # ─── Visita / contagem ────────────────────────────────────────────────────────
@@ -47,28 +51,36 @@ class CountProductResponse(BaseModel):
 class StockVisitItemInput(BaseModel):
     product_id: UUID
     quantity: Decimal = Field(ge=0)
-    expires_at: Optional[date] = None
-    notes: Optional[str] = None
+    unit_type: str = UnitType.UNIDADE.value
+
+    @field_validator("unit_type")
+    @classmethod
+    def _valid_unit_type(cls, value: str) -> str:
+        return UnitType(value).value
 
 
 class StockVisitCreate(BaseModel):
     customer_id: UUID
+    visit_type: str = VisitType.ESTOQUE.value
     # UUID gerado no aparelho — chave de idempotência do reenvio offline
     client_uuid: Optional[str] = Field(default=None, max_length=64)
     visited_at: Optional[datetime] = None
-    notes: Optional[str] = None
     items: List[StockVisitItemInput] = []
     # true = já envia fechada; false = salva rascunho no servidor
     submit: bool = False
+
+    @field_validator("visit_type")
+    @classmethod
+    def _valid_visit_type(cls, value: str) -> str:
+        return VisitType(value).value
 
 
 class StockVisitItemResponse(BaseModel):
     id: UUID
     product_id: UUID
-    product_sku: Optional[str] = None
     product_name: Optional[str] = None
-    product_unit: Optional[str] = None
     quantity: Decimal
+    unit_type: str = UnitType.UNIDADE.value
     expires_at: Optional[date] = None
     notes: Optional[str] = None
 
@@ -80,9 +92,9 @@ class StockVisitResponse(BaseModel):
     tenant_id: UUID
     customer_id: UUID
     customer_name: Optional[str] = None
-    customer_document: Optional[str] = None
     promoter_id: UUID
     promoter_name: Optional[str] = None
+    visit_type: str
     status: str
     visited_at: Optional[datetime] = None
     submitted_at: Optional[datetime] = None
@@ -115,19 +127,3 @@ class AssignmentUpdate(BaseModel):
 class CustomerMixUpdate(BaseModel):
     """Define o mix de produtos contados em um cliente, na ordem informada."""
     product_ids: List[UUID]
-
-
-# ─── Importação de planilhas ──────────────────────────────────────────────────
-
-
-class ImportRowError(BaseModel):
-    row: int
-    reason: str
-
-
-class ImportReport(BaseModel):
-    total_rows: int = 0
-    created: int = 0
-    updated: int = 0
-    skipped: int = 0
-    errors: List[ImportRowError] = []

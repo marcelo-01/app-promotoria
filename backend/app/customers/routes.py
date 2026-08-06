@@ -1,8 +1,7 @@
 """Cadastro temporário de clientes.
 
-Deliberadamente pobre: morre no dia da fusão, quando os clientes passam a vir do
-Firebird via ERP. A via de entrada preferida é a importação de planilha
-(`POST /merchandising/imports/customers`).
+Deliberadamente pobre — só o nome: morre no dia da fusão, quando os clientes
+passam a vir do Firebird via ERP.
 """
 from typing import Optional
 from uuid import UUID

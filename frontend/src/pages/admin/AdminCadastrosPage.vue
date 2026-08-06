@@ -1,7 +1,7 @@
 <!--
-  CRUD mínimo, deliberadamente simples: esta tela MORRE na fusão com o ERP, onde
-  clientes e produtos virão do Firebird. A via de entrada preferida é a
-  importação de planilha (aba "Importar planilhas").
+  CRUD mínimo e deliberadamente simples: esta tela MORRE na fusão com o ERP, onde
+  clientes e produtos virão do Firebird. Cliente é só um nome; produto é nome e
+  foto — é a foto que o promotor usa para reconhecer a embalagem na gôndola.
 -->
 <template>
   <q-page class="q-pa-md">
@@ -27,6 +27,15 @@
 
         <q-table :rows="clientes" :columns="colunasCliente" row-key="id"
                  flat bordered :loading="carregandoClientes" :rows-per-page-options="[25, 50, 100]">
+          <template #body-cell-status="props">
+            <q-td :props="props">
+              <q-toggle
+                :model-value="props.value === 'active'" color="positive"
+                :label="props.value === 'active' ? 'Ativo' : 'Inativo'"
+                @update:model-value="alternarCliente(props.row, $event)"
+              />
+            </q-td>
+          </template>
           <template #body-cell-acoes="props">
             <q-td :props="props" class="text-right">
               <q-btn flat dense round icon="edit" color="primary" @click="abrirCliente(props.row)" />
@@ -48,11 +57,22 @@
 
         <q-table :rows="produtos" :columns="colunasProduto" row-key="id"
                  flat bordered :loading="carregandoProdutos" :rows-per-page-options="[25, 50, 100]">
+          <template #body-cell-foto="props">
+            <q-td :props="props">
+              <q-avatar rounded size="52px" color="grey-3">
+                <img v-if="mediaUrl(props.row.image_url)" :src="mediaUrl(props.row.image_url)"
+                     :alt="props.row.name" />
+                <q-icon v-else name="photo_camera" color="grey-6" />
+              </q-avatar>
+            </q-td>
+          </template>
           <template #body-cell-is_active="props">
             <q-td :props="props">
-              <q-chip dense square :color="props.value ? 'positive' : 'grey-5'" text-color="white">
-                {{ props.value ? 'Ativo' : 'Inativo' }}
-              </q-chip>
+              <q-toggle
+                :model-value="props.value" color="positive"
+                :label="props.value ? 'Ativo' : 'Inativo'"
+                @update:model-value="alternarProduto(props.row, $event)"
+              />
             </q-td>
           </template>
           <template #body-cell-acoes="props">
@@ -115,9 +135,14 @@
               <q-item-section side top>
                 <q-checkbox v-model="mixSelecionado" :val="p.id" :disable="!mixCliente" />
               </q-item-section>
+              <q-item-section avatar>
+                <q-avatar rounded size="40px" color="grey-3">
+                  <img v-if="mediaUrl(p.image_url)" :src="mediaUrl(p.image_url)" :alt="p.name" />
+                  <q-icon v-else name="photo_camera" color="grey-6" size="20px" />
+                </q-avatar>
+              </q-item-section>
               <q-item-section>
                 <q-item-label>{{ p.name }}</q-item-label>
-                <q-item-label caption>{{ p.sku }} · {{ p.unit }}</q-item-label>
               </q-item-section>
             </q-item>
           </q-list>
@@ -127,30 +152,14 @@
 
     <!-- ── Diálogo: cliente ─────────────────────────────────────────── -->
     <q-dialog v-model="dialogCliente">
-      <q-card style="min-width: 340px; max-width: 640px; width: 90vw">
+      <q-card style="min-width: 320px; max-width: 480px; width: 90vw">
         <q-card-section class="text-subtitle1">
           {{ clienteForm.id ? 'Editar cliente' : 'Novo cliente' }}
         </q-card-section>
         <q-separator />
-        <q-card-section class="row q-col-gutter-sm">
-          <q-input class="col-12 col-sm-8" v-model="clienteForm.name" outlined dense
-                   label="Nome fantasia *" />
-          <q-input class="col-12 col-sm-4" v-model="clienteForm.document" outlined dense
-                   label="CNPJ/CPF" hint="Só dígitos" />
-          <q-input class="col-12" v-model="clienteForm.corporate_name" outlined dense
-                   label="Razão social" />
-          <q-input class="col-12 col-sm-6" v-model="clienteForm.phone" outlined dense label="Telefone" />
-          <q-input class="col-12 col-sm-6" v-model="clienteForm.email" outlined dense label="E-mail" />
-          <q-input class="col-12 col-sm-8" v-model="clienteForm.address.street" outlined dense
-                   label="Logradouro" />
-          <q-input class="col-12 col-sm-4" v-model="clienteForm.address.number" outlined dense
-                   label="Número" />
-          <q-input class="col-12 col-sm-5" v-model="clienteForm.address.neighborhood" outlined dense
-                   label="Bairro" />
-          <q-input class="col-12 col-sm-5" v-model="clienteForm.address.city" outlined dense
-                   label="Cidade" />
-          <q-input class="col-12 col-sm-2" v-model="clienteForm.address.state" outlined dense
-                   label="UF" maxlength="2" />
+        <q-card-section>
+          <q-input v-model="clienteForm.name" outlined dense autofocus
+                   label="Nome do cliente *" @keyup.enter="salvarCliente" />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat no-caps label="Cancelar" v-close-popup />
@@ -162,28 +171,38 @@
 
     <!-- ── Diálogo: produto ─────────────────────────────────────────── -->
     <q-dialog v-model="dialogProduto">
-      <q-card style="min-width: 340px; max-width: 640px; width: 90vw">
+      <q-card style="min-width: 320px; max-width: 480px; width: 90vw">
         <q-card-section class="text-subtitle1">
           {{ produtoForm.id ? 'Editar produto' : 'Novo produto' }}
         </q-card-section>
         <q-separator />
-        <q-card-section class="row q-col-gutter-sm">
-          <q-input class="col-12 col-sm-4" v-model="produtoForm.sku" outlined dense label="SKU *" />
-          <q-input class="col-12 col-sm-8" v-model="produtoForm.name" outlined dense label="Nome *" />
-          <q-input class="col-12 col-sm-6" v-model="produtoForm.barcode" outlined dense
-                   label="Código de barras (EAN-13)" />
-          <q-input class="col-12 col-sm-6" v-model="produtoForm.category" outlined dense
-                   label="Categoria" />
-          <q-input class="col-6 col-sm-3" v-model="produtoForm.unit" outlined dense label="Unidade" />
-          <q-input class="col-6 col-sm-3" v-model.number="produtoForm.price" outlined dense
-                   type="number" step="0.01" label="Preço" />
-          <q-input class="col-6 col-sm-3" v-model.number="produtoForm.package_size" outlined dense
-                   type="number" label="Un. por caixa" />
-          <q-input class="col-6 col-sm-3" v-model.number="produtoForm.shelf_life_days" outlined dense
-                   type="number" label="Validade (dias)" />
-          <div class="col-12">
-            <q-toggle v-model="produtoForm.is_active" label="Ativo" />
-            <q-toggle v-model="produtoForm.is_perishable" label="Perecível" />
+        <q-card-section class="q-gutter-md">
+          <q-input v-model="produtoForm.name" outlined dense autofocus
+                   label="Nome do produto *" />
+
+          <div class="row items-center q-col-gutter-md">
+            <div class="col-auto">
+              <q-avatar rounded size="96px" color="grey-3">
+                <img v-if="fotoPreview" :src="fotoPreview" alt="Foto do produto" />
+                <q-icon v-else name="photo_camera" color="grey-6" size="32px" />
+              </q-avatar>
+            </div>
+            <div class="col">
+              <q-file
+                v-model="fotoArquivo" outlined dense clearable
+                accept="image/*" label="Foto do produto"
+                hint="JPG, PNG ou WEBP — até 8 MB"
+                @update:model-value="onFotoSelecionada"
+              >
+                <template #prepend><q-icon name="add_a_photo" /></template>
+              </q-file>
+              <q-btn
+                v-if="produtoForm.image_url && !fotoArquivo"
+                flat dense no-caps size="sm" color="negative"
+                icon="delete" label="Remover foto atual" class="q-mt-xs"
+                @click="removerFoto"
+              />
+            </div>
           </div>
         </q-card-section>
         <q-card-actions align="right">
@@ -196,13 +215,12 @@
 
     <!-- ── Diálogo: promotor ────────────────────────────────────────── -->
     <q-dialog v-model="dialogPromotor">
-      <q-card style="min-width: 340px; max-width: 480px; width: 90vw">
+      <q-card style="min-width: 320px; max-width: 480px; width: 90vw">
         <q-card-section class="text-subtitle1">Novo promotor</q-card-section>
         <q-separator />
         <q-card-section class="q-gutter-sm">
-          <q-input v-model="promotorForm.full_name" outlined dense label="Nome completo" />
+          <q-input v-model="promotorForm.full_name" outlined dense autofocus label="Nome" />
           <q-input v-model="promotorForm.email" outlined dense label="E-mail *" type="email" />
-          <q-input v-model="promotorForm.phone" outlined dense label="Telefone" />
           <q-input v-model="promotorForm.password" outlined dense label="Senha *" type="text"
                    hint="Mínimo 6 caracteres. O promotor usa este e-mail e senha para entrar." />
         </q-card-section>
@@ -236,8 +254,9 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, onUnmounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
+import { mediaUrl } from '@/api/client'
 import { customersApi } from '@/api/customers'
 import { productsApi } from '@/api/products'
 import { usersApi } from '@/api/users'
@@ -257,18 +276,11 @@ const buscaCliente = ref('')
 const carregandoClientes = ref(false)
 const dialogCliente = ref(false)
 
-const emptyAddress = () => ({
-  zip_code: null, street: null, number: null, complement: null,
-  neighborhood: null, city: null, state: null,
-})
-const clienteForm = reactive({ id: null, name: '', document: '', corporate_name: '',
-  phone: '', email: '', address: emptyAddress() })
+const clienteForm = reactive({ id: null, name: '' })
 
 const colunasCliente = [
   { name: 'name', label: 'Nome', field: 'name', align: 'left', sortable: true },
-  { name: 'document', label: 'CNPJ/CPF', field: 'document', align: 'left' },
-  { name: 'city', label: 'Cidade', field: (r) => r.address?.city || '—', align: 'left' },
-  { name: 'phone', label: 'Telefone', field: 'phone', align: 'left' },
+  { name: 'status', label: 'Situação', field: 'status', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
 
@@ -282,28 +294,22 @@ async function carregarClientes() {
 }
 
 function abrirCliente(row) {
-  Object.assign(clienteForm, {
-    id: row?.id || null,
-    name: row?.name || '',
-    document: row?.document || '',
-    corporate_name: row?.corporate_name || '',
-    phone: row?.phone || '',
-    email: row?.email || '',
-    address: { ...emptyAddress(), ...(row?.address || {}) },
-  })
+  Object.assign(clienteForm, { id: row?.id || null, name: row?.name || '' })
   dialogCliente.value = true
 }
 
 async function salvarCliente() {
-  if (!clienteForm.name) {
+  if (!clienteForm.name.trim()) {
     $q.notify({ type: 'warning', message: 'Informe o nome do cliente.' })
     return
   }
   salvando.value = true
-  const { id, ...payload } = clienteForm
   try {
-    if (id) await customersApi.update(id, payload)
-    else await customersApi.create(payload)
+    if (clienteForm.id) {
+      await customersApi.update(clienteForm.id, { name: clienteForm.name })
+    } else {
+      await customersApi.create({ name: clienteForm.name })
+    }
     dialogCliente.value = false
     await carregarClientes()
     $q.notify({ type: 'positive', message: 'Cliente salvo.' })
@@ -314,22 +320,32 @@ async function salvarCliente() {
   }
 }
 
+/** Cliente inativo some da lista do promotor — é assim que se "remove" um. */
+async function alternarCliente(row, ativo) {
+  try {
+    await customersApi.update(row.id, { status: ativo ? 'active' : 'inactive' })
+    await carregarClientes()
+  } catch (error) {
+    notifyError(error, 'Erro ao alterar a situação do cliente')
+  }
+}
+
 // ── Produtos ────────────────────────────────────────────────────────────
 const produtos = ref([])
 const buscaProduto = ref('')
 const carregandoProdutos = ref(false)
 const dialogProduto = ref(false)
 
-const produtoForm = reactive({ id: null, sku: '', name: '', barcode: '', category: '',
-  unit: 'UN', price: 0, package_size: 1, shelf_life_days: null,
-  is_active: true, is_perishable: true })
+const produtoForm = reactive({ id: null, name: '', image_url: null })
+const fotoArquivo = ref(null)
+const fotoPreview = ref(null)
+// A prévia é um object URL: sem revogar, o navegador segura o arquivo na memória
+let previewUrl = null
 
 const colunasProduto = [
-  { name: 'sku', label: 'SKU', field: 'sku', align: 'left', sortable: true },
+  { name: 'foto', label: 'Foto', field: 'image_url', align: 'left' },
   { name: 'name', label: 'Produto', field: 'name', align: 'left', sortable: true },
-  { name: 'barcode', label: 'Cód. barras', field: 'barcode', align: 'left' },
-  { name: 'unit', label: 'Un.', field: 'unit', align: 'left' },
-  { name: 'is_active', label: 'Status', field: 'is_active', align: 'left' },
+  { name: 'is_active', label: 'Situação', field: 'is_active', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
 
@@ -342,40 +358,81 @@ async function carregarProdutos() {
   }
 }
 
+function limparPreview() {
+  if (previewUrl) URL.revokeObjectURL(previewUrl)
+  previewUrl = null
+}
+
 function abrirProduto(row) {
   Object.assign(produtoForm, {
     id: row?.id || null,
-    sku: row?.sku || '',
     name: row?.name || '',
-    barcode: row?.barcode || '',
-    category: row?.category || '',
-    unit: row?.unit || 'UN',
-    price: Number(row?.price || 0),
-    package_size: Number(row?.package_size || 1),
-    shelf_life_days: row?.shelf_life_days ?? null,
-    is_active: row?.is_active ?? true,
-    is_perishable: row?.is_perishable ?? true,
+    image_url: row?.image_url || null,
   })
+  fotoArquivo.value = null
+  limparPreview()
+  fotoPreview.value = mediaUrl(row?.image_url)
   dialogProduto.value = true
 }
 
+function onFotoSelecionada(file) {
+  limparPreview()
+  if (!file) {
+    fotoPreview.value = mediaUrl(produtoForm.image_url)
+    return
+  }
+  previewUrl = URL.createObjectURL(file)
+  fotoPreview.value = previewUrl
+}
+
+async function removerFoto() {
+  salvando.value = true
+  try {
+    const atualizado = await productsApi.removeImage(produtoForm.id)
+    produtoForm.image_url = atualizado.image_url
+    fotoPreview.value = null
+    await carregarProdutos()
+  } catch (error) {
+    notifyError(error, 'Erro ao remover a foto')
+  } finally {
+    salvando.value = false
+  }
+}
+
 async function salvarProduto() {
-  if (!produtoForm.sku || !produtoForm.name) {
-    $q.notify({ type: 'warning', message: 'SKU e nome são obrigatórios.' })
+  if (!produtoForm.name.trim()) {
+    $q.notify({ type: 'warning', message: 'Informe o nome do produto.' })
     return
   }
   salvando.value = true
-  const { id, ...payload } = produtoForm
   try {
-    if (id) await productsApi.update(id, payload)
-    else await productsApi.create(payload)
+    // A foto vai numa segunda chamada (multipart): produto novo só ganha id aqui.
+    const salvo = produtoForm.id
+      ? await productsApi.update(produtoForm.id, { name: produtoForm.name })
+      : await productsApi.create({ name: produtoForm.name })
+
+    if (fotoArquivo.value) {
+      await productsApi.uploadImage(salvo.id, fotoArquivo.value)
+    }
+
     dialogProduto.value = false
+    limparPreview()
     await carregarProdutos()
     $q.notify({ type: 'positive', message: 'Produto salvo.' })
   } catch (error) {
     notifyError(error, 'Erro ao salvar produto')
   } finally {
     salvando.value = false
+  }
+}
+
+/** Produto inativo some da contagem do promotor. */
+async function alternarProduto(row, ativo) {
+  try {
+    await productsApi.update(row.id, { is_active: ativo })
+    await carregarProdutos()
+  } catch (error) {
+    notifyError(error, 'Erro ao alterar a situação do produto')
   }
 }
 
@@ -386,12 +443,11 @@ const dialogSenha = ref(false)
 const senhaAlvo = ref(null)
 const novaSenha = ref('')
 
-const promotorForm = reactive({ full_name: '', email: '', phone: '', password: '' })
+const promotorForm = reactive({ full_name: '', email: '', password: '' })
 
 const colunasPromotor = [
   { name: 'full_name', label: 'Nome', field: 'full_name', align: 'left' },
   { name: 'email', label: 'E-mail', field: 'email', align: 'left' },
-  { name: 'phone', label: 'Telefone', field: 'phone', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
 
@@ -400,7 +456,7 @@ async function carregarPromotores() {
 }
 
 function abrirPromotor() {
-  Object.assign(promotorForm, { full_name: '', email: '', phone: '', password: '' })
+  Object.assign(promotorForm, { full_name: '', email: '', password: '' })
   dialogPromotor.value = true
 }
 
@@ -480,4 +536,6 @@ onMounted(async () => {
   await Promise.all([carregarClientes(), carregarProdutos(), carregarPromotores()])
   clientesFiltradosMix.value = clientes.value
 })
+
+onUnmounted(limparPreview)
 </script>

@@ -1,12 +1,12 @@
 """Cadastro temporário de produtos.
 
 Mesma premissa de `customers/`: morre na fusão, quando o catálogo passa a vir do
-Firebird. A via de entrada preferida é `POST /merchandising/imports/products`.
+Firebird. Aqui só se digita o nome e se anexa a foto.
 """
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, File, Query, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_roles
@@ -65,3 +65,25 @@ async def update_product(
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
     return await ProductsService.update(session, context["tenant_id"], product_id, payload)
+
+
+@router.put("/{product_id}/image", response_model=ProductResponse)
+async def set_product_image(
+    product_id: UUID,
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    """Substitui a foto do produto. A anterior é apagada do disco."""
+    return await ProductsService.set_image(
+        session, context["tenant_id"], product_id, await file.read(), file.content_type
+    )
+
+
+@router.delete("/{product_id}/image", response_model=ProductResponse)
+async def delete_product_image(
+    product_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    return await ProductsService.remove_image(session, context["tenant_id"], product_id)

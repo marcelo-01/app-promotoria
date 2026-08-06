@@ -30,6 +30,14 @@
         </div>
         <div class="col-12 col-md-3">
           <q-select
+            v-model="filtros.visit_type" outlined dense clearable
+            label="Contagem" :options="tiposContagem"
+            option-value="value" option-label="label" emit-value map-options
+            @update:model-value="recarregar"
+          />
+        </div>
+        <div class="col-12 col-md-3">
+          <q-select
             v-model="filtros.status" outlined dense clearable
             label="Status" :options="['submitted', 'exported']"
             @update:model-value="recarregar"
@@ -43,6 +51,18 @@
       :loading="carregando" flat bordered
       v-model:pagination="paginacao" @request="carregar"
     >
+      <template #body-cell-visit_type="props">
+        <q-td :props="props">
+          <q-chip
+            dense square outline
+            :color="props.value === 'gondola' ? 'primary' : 'teal-8'"
+            :icon="props.value === 'gondola' ? 'shelves' : 'inventory_2'"
+          >
+            {{ rotuloTipo(props.value) }}
+          </q-chip>
+        </q-td>
+      </template>
+
       <template #body-cell-status="props">
         <q-td :props="props">
           <q-chip
@@ -82,7 +102,13 @@
       <q-card style="min-width: 340px; max-width: 720px; width: 90vw">
         <q-card-section class="row items-center justify-between">
           <div>
-            <div class="text-subtitle1">{{ detalhe?.customer_name }}</div>
+            <div class="text-subtitle1">
+              {{ detalhe?.customer_name }}
+              <q-chip dense square outline
+                      :color="detalhe?.visit_type === 'gondola' ? 'primary' : 'teal-8'">
+                {{ rotuloTipo(detalhe?.visit_type) }}
+              </q-chip>
+            </div>
             <div class="text-caption text-grey-7">
               {{ detalhe?.promoter_name }} · {{ formatData(detalhe?.visited_at) }}
             </div>
@@ -100,14 +126,13 @@
           <q-item v-for="item in detalhe?.items || []" :key="item.id">
             <q-item-section>
               <q-item-label>{{ item.product_name }}</q-item-label>
-              <q-item-label caption>
-                {{ item.product_sku }}
-                <span v-if="item.expires_at"> · validade {{ formatDia(item.expires_at) }}</span>
+              <q-item-label v-if="item.expires_at || item.notes" caption>
+                <span v-if="item.expires_at">validade {{ formatDia(item.expires_at) }}</span>
                 <span v-if="item.notes"> · {{ item.notes }}</span>
               </q-item-label>
             </q-item-section>
             <q-item-section side class="text-weight-bold text-primary">
-              {{ formatQtd(item.quantity) }} {{ item.product_unit }}
+              {{ formatQtd(item.quantity) }} {{ item.unit_type === 'caixa' ? 'cx' : 'un' }}
             </q-item-section>
           </q-item>
         </q-list>
@@ -133,19 +158,26 @@ const detalheAberto = ref(false)
 const detalhe = ref(null)
 
 const filtros = reactive({
-  date_from: '', date_to: '', promoter_id: null, status: null,
+  date_from: '', date_to: '', promoter_id: null, visit_type: null, status: null,
 })
 const paginacao = ref({ page: 1, rowsPerPage: 25, rowsNumber: 0 })
+
+const tiposContagem = [
+  { value: 'gondola', label: 'Gôndola' },
+  { value: 'estoque', label: 'Estoque' },
+]
 
 const formatData = (v) => (v ? new Date(v).toLocaleString('pt-BR') : '—')
 const formatDia = (v) => (v ? new Date(`${v}T00:00:00`).toLocaleDateString('pt-BR') : '—')
 const formatQtd = (v) => Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
+const rotuloTipo = (v) => (v === 'gondola' ? 'Gôndola' : 'Estoque')
 
 const colunas = [
   { name: 'visited_at', label: 'Data', field: 'visited_at', align: 'left',
     format: (v) => (v ? new Date(v).toLocaleString('pt-BR') : '—') },
   { name: 'customer_name', label: 'Cliente', field: 'customer_name', align: 'left' },
   { name: 'promoter_name', label: 'Promotor', field: 'promoter_name', align: 'left' },
+  { name: 'visit_type', label: 'Contagem', field: 'visit_type', align: 'left' },
   { name: 'items_count', label: 'Itens', field: 'items_count', align: 'right' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },

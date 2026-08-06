@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.repository import CustomersRepository as Repo
@@ -34,20 +34,11 @@ class CustomersService:
     async def create(
         session: AsyncSession, tenant_id: UUID, payload: CustomerCreate
     ) -> Customer:
-        if payload.document:
-            existing = await Repo.get_by_document(session, tenant_id, payload.document)
-            if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Já existe um cliente com o documento {payload.document}",
-                )
-
         customer = Customer(
             id=uuid4(),
             tenant_id=tenant_id,
+            name=payload.name,
             status=CustomerStatus.ACTIVE,
-            **payload.model_dump(exclude={"address"}),
-            address=payload.address.model_dump() if payload.address else None,
         )
         return await Repo.save(session, customer)
 
@@ -59,21 +50,14 @@ class CustomersService:
 
         data = payload.model_dump(exclude_unset=True)
 
-        document = data.get("document")
-        if document and document != customer.document:
-            existing = await Repo.get_by_document(session, tenant_id, document)
-            if existing and existing.id != customer.id:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Já existe um cliente com o documento {document}",
-                )
-
-        if "address" in data:
-            data["address"] = payload.address.model_dump() if payload.address else None
-        if "status" in data and data["status"] is not None:
-            data["status"] = CustomerStatus(data["status"])
+        if data.get("status") is not None:
+            try:
+                data["status"] = CustomerStatus(data["status"])
+            except ValueError:
+                raise HTTPException(status_code=422, detail="Status inválido")
 
         for key, value in data.items():
-            setattr(customer, key, value)
+            if value is not None:
+                setattr(customer, key, value)
 
         return await Repo.save(session, customer)

@@ -2,16 +2,17 @@ from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_roles
+from app.infrastructure.persistence.models.stock_visit import VisitType
 from app.infrastructure.persistence.session import get_db_session
-from app.merchandising import excel, imports
+from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    AssignmentUpdate, CountProductResponse, CustomerMixUpdate, ImportReport,
-    PromoterCustomerResponse, StockVisitCreate, StockVisitListResponse, StockVisitResponse,
+    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, PromoterCustomerResponse,
+    StockVisitCreate, StockVisitListResponse, StockVisitResponse,
 )
 from app.merchandising.service import MerchandisingService
 
@@ -19,6 +20,15 @@ router = APIRouter(prefix="/merchandising", tags=["merchandising"])
 
 _ADMIN = ("admin", "supervisor")
 _FIELD = ("promoter", "admin", "supervisor")
+
+
+def _validate_visit_type(value: str) -> str:
+    try:
+        return VisitType(value).value
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="Tipo de contagem inválido. Use gondola ou estoque."
+        )
 
 
 # ─── Promotor ─────────────────────────────────────────────────────────────────
@@ -34,15 +44,20 @@ async def list_my_customers(
     )
 
 
-@router.get("/customers/{customer_id}/products", response_model=list[CountProductResponse])
-async def list_products_for_customer(
+@router.get(
+    "/customers/{customer_id}/count-sheet/{visit_type}",
+    response_model=CountSheetResponse,
+)
+async def get_count_sheet(
     customer_id: UUID,
-    search: Optional[str] = None,
+    visit_type: str,
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_FIELD)),
 ):
-    return await MerchandisingService.list_products_for_customer(
-        session, context["tenant_id"], context["user"], customer_id, search
+    """Folha de contagem de um cliente: gôndola ou estoque."""
+    return await MerchandisingService.count_sheet(
+        session, context["tenant_id"], context["user"],
+        customer_id, _validate_visit_type(visit_type),
     )
 
 
@@ -94,6 +109,7 @@ async def list_visits(
     promoter_id: Optional[UUID] = None,
     customer_id: Optional[UUID] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
+    visit_type: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     limit: int = Query(50, ge=1, le=200),
@@ -104,7 +120,8 @@ async def list_visits(
     items, total = await MerchandisingService.list_visits(
         session, context["tenant_id"],
         promoter_id=promoter_id, customer_id=customer_id, status=status_filter,
-        date_from=date_from, date_to=date_to, limit=limit, offset=offset,
+        visit_type=visit_type, date_from=date_from, date_to=date_to,
+        limit=limit, offset=offset,
     )
     return StockVisitListResponse(items=items, total=total, limit=limit, offset=offset)
 
@@ -138,6 +155,7 @@ async def get_visit(
 async def export_consolidated(
     promoter_id: Optional[UUID] = None,
     customer_id: Optional[UUID] = None,
+    visit_type: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     session: AsyncSession = Depends(get_db_session),
@@ -145,7 +163,7 @@ async def export_consolidated(
 ):
     rows = await Repo.export_rows(
         session, context["tenant_id"],
-        promoter_id=promoter_id, customer_id=customer_id,
+        promoter_id=promoter_id, customer_id=customer_id, visit_type=visit_type,
         date_from=date_from, date_to=date_to,
     )
     buf = excel.build_workbook(rows, sheet_title="Consolidado")
@@ -199,34 +217,3 @@ async def set_customer_mix(
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
     await Repo.replace_mix(session, context["tenant_id"], customer_id, payload.product_ids)
-
-
-# ─── Administrador: importação de planilhas ───────────────────────────────────
-
-@router.post("/imports/customers", response_model=ImportReport)
-async def import_customers(
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    return await imports.import_customers(session, context["tenant_id"], await file.read())
-
-
-@router.post("/imports/products", response_model=ImportReport)
-async def import_products(
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    return await imports.import_products(session, context["tenant_id"], await file.read())
-
-
-@router.get("/imports/{entity}/template.xlsx")
-async def download_template(
-    entity: str,
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    if entity not in ("customers", "products"):
-        raise HTTPException(status_code=404, detail="Modelo não encontrado")
-    buf = imports.build_template(entity)
-    return excel.xlsx_response(buf, f"modelo_{entity}.xlsx")

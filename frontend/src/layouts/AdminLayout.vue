@@ -56,7 +56,6 @@ const menu = [
   { name: 'AdminVisitas', label: 'Contagens recebidas', icon: 'inventory' },
   { name: 'AdminVinculos', label: 'Clientes por promotor', icon: 'link' },
   { name: 'AdminCadastros', label: 'Cadastros', icon: 'folder_shared' },
-  { name: 'AdminImportacao', label: 'Importar planilhas', icon: 'upload_file' },
 ]
 
 function logout() {

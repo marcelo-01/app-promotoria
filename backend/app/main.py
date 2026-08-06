@@ -3,11 +3,13 @@ import re
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 from app.auth.routes import router as auth_router
 from app.core.config import settings
 from app.customers.routes import router as customers_router
 from app.merchandising.routes import router as merchandising_router
+from app.products import images as product_images
 from app.products.routes import router as products_router
 from app.users.routes import router as users_router
 from app.infrastructure.persistence import models  # noqa: F401
@@ -79,3 +81,12 @@ app.include_router(customers_router)
 app.include_router(products_router)
 app.include_router(users_router)
 app.include_router(merchandising_router)
+
+# Fotos dos produtos. Servidas pela própria API — sem bucket, sem CDN: são poucas
+# dezenas de imagens e o app precisa funcionar dentro da rede do cliente.
+product_images.ensure_dirs()
+app.mount(
+    "/uploads",
+    StaticFiles(directory=product_images.UPLOAD_ROOT),
+    name="uploads",
+)

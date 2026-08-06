@@ -10,9 +10,16 @@ arbitrárias e não são (as "6 âncoras", seção 3 do plano).
 
 ## O fluxo
 
-**Promotor** (celular, PWA): clientes → produtos → digita o estoque → envia.
-**Administrador** (desktop): cadastra clientes/produtos, define quais clientes cada
-promotor atende, e baixa as contagens em planilha `.xlsx`.
+**Promotor** (celular, PWA): escolhe o cliente → escolhe **gôndola** ou **estoque** →
+um produto por tela (foto grande à esquerda, quantidade à direita, em caixas ou
+unidades) → envia. Produto sem número digitado não é enviado.
+
+**Administrador** (desktop): cadastra clientes (só o nome), produtos (nome e foto)
+e promotores (nome, e-mail e senha), define quais clientes cada promotor atende, e
+baixa as contagens em planilha `.xlsx`.
+
+Gôndola e estoque do mesmo cliente são contagens independentes: cada uma tem sua
+data, sua planilha e sua "contagem anterior".
 
 ## Stack
 
@@ -25,6 +32,7 @@ promotor atende, e baixa as contagens em planilha `.xlsx`.
 | Auth | JWT (python-jose) + bcrypt |
 | App | Vue 3 + Quasar 2 + Pinia + Vite (PWA) |
 | Excel | openpyxl |
+| Fotos | Pillow — gravadas em `backend/uploads/`, servidas em `/uploads/` |
 
 Portas escolhidas para não colidir com o ERP rodando na mesma máquina:
 API `8002`, web `5174`, Postgres `5434`.
@@ -51,10 +59,10 @@ Usuários criados pelo `seed`:
 ## Primeiro uso
 
 1. Entre como `admin`.
-2. **Importar planilhas** → baixe a planilha-modelo, preencha e importe clientes e
-   produtos. (Ou cadastre manualmente em **Cadastros** — mas a planilha é a via
-   pensada para volume.)
-3. **Cadastros → Promotores** → crie o promotor com e-mail e senha.
+2. **Cadastros → Clientes** e **→ Produtos** → cadastre os clientes (só o nome) e os
+   produtos (nome + foto). A foto é o que o promotor usa para reconhecer a
+   embalagem na gôndola, então vale tirar uma boa.
+3. **Cadastros → Promotores** → crie o promotor com nome, e-mail e senha.
 4. **Clientes por promotor** → marque quais clientes ele atende e salve.
 5. *(Opcional)* **Cadastros → Mix por cliente** → escolha quais produtos são
    contados em cada cliente. Sem mix, o promotor vê o catálogo completo.
@@ -113,7 +121,16 @@ ou `products/` — se a fronteira estiver limpa, a fusão é copiar duas pastas.
   Adicionar isso depois custa migração + backfill + revisão de todas as queries.
 - **UUID como PK.** IDs sequenciais colidiriam com os do ERP na fusão.
 - **`document` (só dígitos) e `sku`** são as chaves naturais que casam os cadastros
-  no dia da integração. `external_id` nasce vazio e recebe o ID do Firebird.
+  no dia da integração. Continuam nas tabelas mesmo sem ninguém as digitar hoje —
+  o cadastro deste app pede só o nome. `external_id` nasce vazio e recebe o ID do
+  Firebird.
+- **Foto do produto em disco, não em base64 no banco.** A tela de contagem carrega
+  o catálogo inteiro de uma vez; foto embutida no JSON inviabilizaria isso no sinal
+  de um supermercado. Em disco, o service worker cacheia cada foto e a contagem
+  funciona offline.
+- **`visit_type` (`gondola`/`estoque`) na visita e `unit_type` (`caixa`/`unidade`)
+  no item.** O promotor conta os dois lugares separadamente e escolhe a unidade
+  produto a produto.
 - **`client_uuid` nas visitas.** O celular gera o UUID; reenviar a mesma contagem
   faz `UPDATE`, não duplica. É o que salva a contagem feita com sinal ruim.
 - **Prefixo `/merchandising`** em todas as rotas do domínio de coleta, para que o

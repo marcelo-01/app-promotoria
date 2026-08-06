@@ -43,7 +43,9 @@
       <router-view />
     </q-page-container>
 
-    <q-footer elevated class="bg-white text-primary">
+    <!-- Durante a contagem as abas somem: a tela é um produto por vez e a barra
+         de envio da própria página ocupa esse espaço. -->
+    <q-footer v-if="!contando" elevated class="bg-white text-primary">
       <q-tabs
         v-model="tab" dense no-caps active-color="primary"
         indicator-color="primary" class="text-grey-7"
@@ -87,14 +89,16 @@ watch(
 )
 
 const canGoBack = computed(() => route.name !== 'PromotorClientes')
+const contando = computed(() => route.name === 'PromotorContagem')
+
 const title = computed(() => {
-  const titles = {
-    PromotorClientes: 'Meus Clientes',
-    PromotorProdutos: 'Contagem',
-    PromotorContagem: 'Digitar estoque',
-    PromotorEnvios: 'Envios',
+  if (contando.value) {
+    const lugar = route.params.visitType === 'gondola' ? 'Gôndola' : 'Estoque'
+    // O nome do cliente vem na query só para o cabeçalho — abrir a URL direto
+    // (sem passar pela lista) continua funcionando, só sem o nome.
+    return route.query.c ? `${route.query.c} · ${lugar}` : lugar
   }
-  return titles[route.name] || 'Coleta de Estoque'
+  return route.name === 'PromotorEnvios' ? 'Envios' : 'Meus Clientes'
 })
 
 async function sync() {

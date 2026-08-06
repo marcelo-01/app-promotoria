@@ -72,7 +72,6 @@ class UsersService:
             email=payload.email,
             password_hash=AuthService.hash_password(payload.password),
             full_name=payload.full_name,
-            phone=payload.phone,
             role=UserRole(payload.role),
             is_active=True,
         )

@@ -6,10 +6,11 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UserCreate(BaseModel):
+    """Promotor é nome, e-mail e senha — nada mais."""
+
     email: EmailStr
     password: str = Field(..., min_length=6)
     full_name: Optional[str] = Field(default=None, max_length=255)
-    phone: Optional[str] = Field(default=None, max_length=30)
     # Papéis aceitos neste app: promoter (padrão) ou admin
     role: str = "promoter"
 
@@ -29,7 +30,6 @@ class UserResponse(BaseModel):
     tenant_id: UUID
     email: str
     full_name: Optional[str] = None
-    phone: Optional[str] = None
     role: str
     is_active: bool
     created_at: Optional[datetime] = None

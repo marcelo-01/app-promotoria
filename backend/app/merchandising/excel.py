@@ -14,21 +14,22 @@ XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 _HEADERS = [
     ("Data da visita", 18),
-    ("CNPJ/CPF", 20),
     ("Cliente", 36),
     ("Promotor", 24),
-    ("SKU", 14),
-    ("Cód. barras", 16),
+    ("Contagem", 12),
     ("Produto", 40),
-    ("Un.", 8),
-    ("Qtd. em estoque", 16),
-    ("Validade", 12),
-    ("Obs. do item", 28),
-    ("Obs. da visita", 28),
+    ("Quantidade", 14),
+    ("Unidade", 12),
 ]
+
+# Coluna de quantidade — usada para formatar os números depois de preencher
+_QUANTITY_COLUMN = 6
 
 _HEADER_FILL = PatternFill("solid", fgColor="1A237E")   # mesma cor primária do ERP
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
+
+_VISIT_TYPE_LABEL = {"gondola": "Gôndola", "estoque": "Estoque"}
+_UNIT_TYPE_LABEL = {"caixa": "Caixa", "unidade": "Unidade"}
 
 
 def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
@@ -47,26 +48,23 @@ def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
     for r in rows:
         ws.append([
             r.visited_at.strftime("%d/%m/%Y %H:%M") if r.visited_at else "",
-            r.document or "",
             r.customer_name or "",
             r.promoter_name or "",
-            r.sku or "",
-            r.barcode or "",
+            _VISIT_TYPE_LABEL.get(r.visit_type, r.visit_type or ""),
             r.product_name or "",
-            r.unit or "",
             float(r.quantity) if r.quantity is not None else 0.0,
-            r.expires_at.strftime("%d/%m/%Y") if r.expires_at else "",
-            r.notes or "",
-            r.visit_notes or "",
+            _UNIT_TYPE_LABEL.get(r.unit_type, r.unit_type or ""),
         ])
 
     # Congela o cabeçalho e liga o autofiltro — o administrador vai filtrar muito
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(_HEADERS))}{ws.max_row}"
 
-    for row in ws.iter_rows(min_row=2, min_col=9, max_col=9):
+    for row in ws.iter_rows(
+        min_row=2, min_col=_QUANTITY_COLUMN, max_col=_QUANTITY_COLUMN
+    ):
         for cell in row:
-            cell.number_format = "#,##0.000"
+            cell.number_format = "#,##0.###"
 
     buf = BytesIO()
     wb.save(buf)

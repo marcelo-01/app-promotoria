@@ -12,6 +12,19 @@ const apiBaseURL = import.meta.env.PROD
     ? '/api-proxy'
     : `http://${devHost}:8002`
 
+export { apiBaseURL }
+
+/**
+ * Caminho de arquivo servido pela API (`/uploads/...`) → URL absoluta.
+ * A foto do produto é gravada no backend, que em dev roda em outra porta e sob
+ * HTTPS passa pelo proxy do Vite — por isso nunca se usa o caminho cru no `src`.
+ */
+export function mediaUrl(path) {
+  if (!path) return null
+  if (path.startsWith('http://') || path.startsWith('https://')) return path
+  return `${apiBaseURL}${path}`
+}
+
 const apiClient = axios.create({
   baseURL: apiBaseURL,
   timeout: 10000,

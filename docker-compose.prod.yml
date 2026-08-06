@@ -39,6 +39,10 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS}
       FRONTEND_URL: ${FRONTEND_URL}
+    volumes:
+      # Fotos dos produtos. Sem este volume, um redeploy com --build apagaria
+      # todas as fotos junto com a imagem antiga do contêiner.
+      - estoque_uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy
@@ -63,6 +67,8 @@ services:
 
 volumes:
   estoque_pg_data:
+    driver: local
+  estoque_uploads:
     driver: local
 
 networks:

@@ -13,7 +13,9 @@ class Product(DeclarativeBase, TimestampMixin):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
 
     # ── Chaves de casamento com o ERP (Âncora 4) ──────────────────────────
-    sku = Column(String(50), nullable=False)
+    # Opcionais: o cadastro deste app pede só o nome. Continuam aqui porque é
+    # por eles que o catálogo casa com o Firebird no dia da fusão.
+    sku = Column(String(50), nullable=True)
     barcode = Column(String(30), nullable=True)           # EAN-13
     external_id = Column(String(255), nullable=True)
 

@@ -1,8 +1,13 @@
+<!--
+  Tela inicial do promotor: um card grande por cliente, com os dois destinos de
+  contagem lado a lado. Card grande e botão grande porque isso é usado em pé,
+  no corredor do mercado, com uma mão só.
+-->
 <template>
   <q-page class="q-pa-md">
     <q-input
       v-model="search" outlined dense clearable
-      placeholder="Buscar cliente..." class="q-mb-md"
+      placeholder="Buscar cliente..." class="q-mb-md bg-white"
       @update:model-value="onSearch"
     >
       <template #prepend><q-icon name="search" /></template>
@@ -17,37 +22,40 @@
       Nenhum cliente atribuído a você. Fale com o administrador.
     </q-banner>
 
-    <q-list v-else separator class="rounded-borders bg-white">
-      <q-item
-        v-for="customer in customers" :key="customer.id"
-        clickable v-ripple class="q-py-md"
-        @click="abrir(customer)"
-      >
-        <q-item-section avatar>
-          <q-avatar color="primary" text-color="white" icon="store" />
-        </q-item-section>
+    <div v-else class="column q-gutter-md">
+      <q-card v-for="customer in customers" :key="customer.id" flat bordered class="cliente-card">
+        <q-card-section class="q-pb-sm">
+          <div class="row items-center no-wrap">
+            <q-avatar color="primary" text-color="white" icon="store" size="44px" class="q-mr-md" />
+            <div class="col text-h6 text-weight-bold ellipsis-2-lines">
+              {{ customer.name }}
+            </div>
+          </div>
+        </q-card-section>
 
-        <q-item-section>
-          <q-item-label class="text-weight-medium">{{ customer.name }}</q-item-label>
-          <q-item-label caption lines="1">
-            {{ formatCidade(customer.address) }}
-          </q-item-label>
-          <q-item-label caption class="text-grey-6">
-            {{ customer.last_visited_at
-              ? `Última contagem: ${formatData(customer.last_visited_at)}`
-              : 'Nunca contado' }}
-          </q-item-label>
-        </q-item-section>
-
-        <q-item-section side>
-          <!-- Rascunho em andamento neste aparelho -->
-          <q-badge v-if="rascunho(customer.id)" color="warning" text-color="dark">
-            {{ rascunho(customer.id) }} itens
-          </q-badge>
-          <q-icon v-else name="chevron_right" color="grey-5" />
-        </q-item-section>
-      </q-item>
-    </q-list>
+        <q-card-section class="row q-col-gutter-sm q-pt-none">
+          <div v-for="tipo in TIPOS" :key="tipo.value" class="col-6">
+            <q-btn
+              stack unelevated no-caps
+              class="full-width acao-btn"
+              :color="tipo.color" :icon="tipo.icon"
+              @click="abrir(customer, tipo.value)"
+            >
+              <div class="text-subtitle2 text-weight-bold q-mt-xs">{{ tipo.label }}</div>
+              <q-badge
+                v-if="pendente(customer.id, tipo.value)"
+                color="warning" text-color="dark" floating
+              >
+                {{ pendente(customer.id, tipo.value) }}
+              </q-badge>
+            </q-btn>
+            <div class="text-caption text-grey-7 text-center q-mt-xs">
+              {{ ultimaContagem(customer, tipo.value) }}
+            </div>
+          </div>
+        </q-card-section>
+      </q-card>
+    </div>
   </q-page>
 </template>
 
@@ -61,6 +69,11 @@ import { useVisitaStore } from '@/stores/visita'
 const router = useRouter()
 const $q = useQuasar()
 const visita = useVisitaStore()
+
+const TIPOS = [
+  { value: 'gondola', label: 'Gôndola', icon: 'shelves', color: 'primary' },
+  { value: 'estoque', label: 'Estoque', icon: 'inventory_2', color: 'teal-8' },
+]
 
 const customers = ref([])
 const loading = ref(false)
@@ -86,17 +99,38 @@ function onSearch() {
   debounce = setTimeout(carregar, 350)
 }
 
-const rascunho = (customerId) => visita.itemsCount(customerId)
+/** Itens já digitados neste aparelho e ainda não enviados. */
+const pendente = (customerId, tipo) => visita.itemsCount(customerId, tipo)
 
-function abrir(customer) {
-  router.push({ name: 'PromotorProdutos', params: { customerId: customer.id } })
+function abrir(customer, tipo) {
+  router.push({
+    name: 'PromotorContagem',
+    params: { customerId: customer.id, visitType: tipo },
+    query: { c: customer.name },
+  })
 }
 
-const formatCidade = (address) =>
-  address?.city ? `${address.city}${address.state ? ' - ' + address.state : ''}` : '—'
-
-const formatData = (iso) => new Date(iso).toLocaleDateString('pt-BR')
+function ultimaContagem(customer, tipo) {
+  const iso = tipo === 'gondola' ? customer.last_gondola_at : customer.last_estoque_at
+  return iso ? new Date(iso).toLocaleDateString('pt-BR') : 'nunca contado'
+}
 
 onMounted(carregar)
 onUnmounted(() => clearTimeout(debounce))
 </script>
+
+<style scoped>
+.cliente-card {
+  border-radius: 14px;
+}
+
+/* Alvo de toque grande: o promotor acerta o botão sem parar para mirar. */
+.acao-btn {
+  height: 104px;
+  border-radius: 12px;
+}
+
+.acao-btn :deep(.q-icon) {
+  font-size: 34px;
+}
+</style>

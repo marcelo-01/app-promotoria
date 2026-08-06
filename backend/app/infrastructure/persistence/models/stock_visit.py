@@ -15,6 +15,21 @@ class StockVisitStatus(str, enum.Enum):
     EXPORTED = "exported"     # já baixado em planilha pelo administrador
 
 
+class VisitType(str, enum.Enum):
+    """Onde a contagem foi feita. O promotor conta os dois lugares separadamente:
+    o que está exposto na gôndola e o que está guardado no estoque da loja."""
+
+    GONDOLA = "gondola"
+    ESTOQUE = "estoque"
+
+
+class UnitType(str, enum.Enum):
+    """Como o promotor contou aquele item — ele escolhe na hora, por produto."""
+
+    CAIXA = "caixa"
+    UNIDADE = "unidade"
+
+
 class StockVisit(DeclarativeBase, TimestampMixin):
     """Contagem de estoque feita por um promotor em um cliente."""
 
@@ -24,6 +39,9 @@ class StockVisit(DeclarativeBase, TimestampMixin):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=False)
     promoter_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
+
+    # String e não Enum nativo, pelo mesmo motivo de `status` abaixo.
+    visit_type = Column(String(20), nullable=False, default=VisitType.ESTOQUE.value)
 
     # String e não Enum nativo: mesmo padrão de `orders.order_status` no ERP,
     # que evita ALTER TYPE a cada novo status.
@@ -60,6 +78,8 @@ class StockVisitItem(DeclarativeBase, TimestampMixin):
 
     # Numeric(15,3): mesmo tipo de products.stock e order_items.quantity no ERP
     quantity = Column(Numeric(15, 3), nullable=False, default=0)
+    # caixa | unidade — escolhido pelo promotor em cada produto
+    unit_type = Column(String(10), nullable=False, default=UnitType.UNIDADE.value)
     # Laticínio é perecível — validade é informação de negócio, não detalhe
     expires_at = Column(Date, nullable=True)
     notes = Column(Text, nullable=True)

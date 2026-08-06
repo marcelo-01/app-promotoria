@@ -17,10 +17,10 @@ export const merchandisingApi = {
     return data
   },
 
-  async productsForCustomer(customerId, params = {}) {
+  /** Folha de contagem: cliente + produtos + contagem anterior, numa chamada só. */
+  async countSheet(customerId, visitType) {
     const { data } = await apiClient.get(
-      `/merchandising/customers/${customerId}/products`,
-      { params: normalizeParams(params) }
+      `/merchandising/customers/${customerId}/count-sheet/${visitType}`
     )
     return data
   },
@@ -96,24 +96,6 @@ export const merchandisingApi = {
     await apiClient.put(`/merchandising/customers/${customerId}/mix`, {
       product_ids: productIds,
     })
-  },
-
-  async importFile(entity, file) {
-    const form = new FormData()
-    form.append('file', file)
-    const { data } = await apiClient.post(`/merchandising/imports/${entity}`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
-    })
-    return data
-  },
-
-  async downloadTemplate(entity) {
-    const response = await apiClient.get(
-      `/merchandising/imports/${entity}/template.xlsx`,
-      { responseType: 'blob' }
-    )
-    downloadBlob(response)
   },
 }
 

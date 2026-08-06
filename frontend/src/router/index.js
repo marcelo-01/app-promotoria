@@ -15,13 +15,9 @@ export const promotorRoutes = [
         component: () => import('@/pages/promotor/PromotorClientesPage.vue'),
       },
       {
-        path: 'clientes/:customerId/produtos',
-        name: 'PromotorProdutos',
-        component: () => import('@/pages/promotor/PromotorProdutosPage.vue'),
-        props: true,
-      },
-      {
-        path: 'clientes/:customerId/produtos/:productId',
+        // O tipo vai no caminho e é validado aqui: uma URL com tipo inventado
+        // cai no catch-all e volta para a lista de clientes.
+        path: 'clientes/:customerId/:visitType(gondola|estoque)',
         name: 'PromotorContagem',
         component: () => import('@/pages/promotor/PromotorContagemPage.vue'),
         props: true,
@@ -57,11 +53,6 @@ export const adminRoutes = [
         path: 'cadastros',
         name: 'AdminCadastros',
         component: () => import('@/pages/admin/AdminCadastrosPage.vue'),
-      },
-      {
-        path: 'importacao',
-        name: 'AdminImportacao',
-        component: () => import('@/pages/admin/AdminImportacaoPage.vue'),
       },
     ],
   },

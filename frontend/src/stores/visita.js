@@ -8,6 +8,21 @@ const QUEUE_KEY = 'estoque_queue'
 const load = (key) => JSON.parse(localStorage.getItem(key) || '{}')
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value))
 
+/** Gôndola e estoque do mesmo cliente são contagens independentes. */
+export const draftKey = (customerId, visitType) => `${customerId}|${visitType}`
+
+/**
+ * Rascunhos do formato antigo (chave = só o customerId, sem tipo de contagem)
+ * não têm como ser reaproveitados: não dá para saber se aquilo era gôndola ou
+ * estoque. Some com eles em vez de deixá-los presos no aparelho para sempre.
+ */
+function dropLegacyDrafts(all) {
+  Object.keys(all).forEach((key) => {
+    if (!key.includes('|')) delete all[key]
+  })
+  return all
+}
+
 /** Fallback para navegadores sem crypto.randomUUID (contexto não-seguro). */
 const newUuid = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID
@@ -19,8 +34,8 @@ const newUuid = () =>
       })
 
 export const useVisitaStore = defineStore('visita', () => {
-  // { [customerId]: { client_uuid, visited_at, notes, items: { [productId]: {...} } } }
-  const drafts = ref(load(DRAFTS_KEY))
+  // { [customerId|visitType]: { client_uuid, visited_at, items: { [productId]: {...} } } }
+  const drafts = ref(dropLegacyDrafts(load(DRAFTS_KEY)))
   // Contagens fechadas que ainda não subiram
   const queue = ref(JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'))
   const sending = ref(false)
@@ -32,62 +47,64 @@ export const useVisitaStore = defineStore('visita', () => {
 
   const pendingCount = computed(() => queue.value.length)
 
-  function getDraft(customerId) {
-    if (!drafts.value[customerId]) {
-      drafts.value[customerId] = {
+  function getDraft(customerId, visitType) {
+    const key = draftKey(customerId, visitType)
+    if (!drafts.value[key]) {
+      drafts.value[key] = {
+        customer_id: customerId,
+        visit_type: visitType,
         client_uuid: newUuid(),
         visited_at: new Date().toISOString(),
-        notes: '',
         items: {},
       }
       persist()
     }
-    return drafts.value[customerId]
+    return drafts.value[key]
   }
 
-  function setItem(customerId, productId, { quantity, expires_at, notes }) {
-    const draft = getDraft(customerId)
+  /** Quantidade vazia (null/'') apaga o item: produto em branco é produto não contado. */
+  function setItem(customerId, visitType, productId, { quantity, unit_type }) {
+    const draft = getDraft(customerId, visitType)
     if (quantity === null || quantity === undefined || quantity === '') {
       delete draft.items[productId]
     } else {
       draft.items[productId] = {
         product_id: productId,
         quantity: Number(quantity),
-        expires_at: expires_at || null,
-        notes: notes || null,
+        unit_type: unit_type || 'unidade',
       }
     }
     persist()
   }
 
-  function itemsCount(customerId) {
-    return Object.keys(drafts.value[customerId]?.items || {}).length
+  function itemsCount(customerId, visitType) {
+    return Object.keys(drafts.value[draftKey(customerId, visitType)]?.items || {}).length
   }
 
-  function clearDraft(customerId) {
-    delete drafts.value[customerId]
+  function clearDraft(customerId, visitType) {
+    delete drafts.value[draftKey(customerId, visitType)]
     persist()
   }
 
   /** Fecha a contagem: tenta enviar; se falhar, enfileira para reenvio. */
-  async function submit(customerId) {
-    const draft = getDraft(customerId)
+  async function submit(customerId, visitType) {
+    const draft = getDraft(customerId, visitType)
     const payload = {
       customer_id: customerId,
+      visit_type: visitType,
       client_uuid: draft.client_uuid,
       visited_at: draft.visited_at,
-      notes: draft.notes || null,
       items: Object.values(draft.items),
       submit: true,
     }
 
     try {
       await merchandisingApi.saveVisit(payload)
-      clearDraft(customerId)
+      clearDraft(customerId, visitType)
       return { sent: true }
     } catch (error) {
       queue.value.push(payload)
-      clearDraft(customerId)
+      clearDraft(customerId, visitType)
       persist()
       return { sent: false, error }
     }

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.customer import Customer
@@ -23,14 +23,7 @@ class CustomersRepository:
         base = select(Customer).where(Customer.tenant_id == tenant_id)
 
         if search:
-            like = f"%{search.strip()}%"
-            base = base.where(
-                or_(
-                    Customer.name.ilike(like),
-                    Customer.corporate_name.ilike(like),
-                    Customer.document.ilike(like),
-                )
-            )
+            base = base.where(Customer.name.ilike(f"%{search.strip()}%"))
 
         total = (
             await session.execute(select(func.count()).select_from(base.subquery()))
@@ -48,15 +41,6 @@ class CustomersRepository:
     ) -> Optional[Customer]:
         query = select(Customer).where(
             Customer.tenant_id == tenant_id, Customer.id == customer_id
-        )
-        return (await session.execute(query)).scalars().first()
-
-    @staticmethod
-    async def get_by_document(
-        session: AsyncSession, tenant_id: UUID, document: str
-    ) -> Optional[Customer]:
-        query = select(Customer).where(
-            Customer.tenant_id == tenant_id, Customer.document == document
         )
         return (await session.execute(query)).scalars().first()
 
