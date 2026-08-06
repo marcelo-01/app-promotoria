@@ -30,11 +30,11 @@
             :src="imagem(product)" :alt="product.name" class="foto-img"
           />
           <div v-else class="foto-vazia column items-center justify-center">
-            <q-icon name="photo_camera" size="52px" color="grey-5" />
-            <div class="text-caption text-grey-6 q-mt-sm">sem foto</div>
+            <q-icon name="photo_camera" size="52px" color="indigo-4" />
+            <div class="text-caption text-indigo-4 q-mt-sm">sem foto</div>
           </div>
 
-          <q-badge class="contador" color="dark" text-color="white">
+          <q-badge class="contador" color="primary" text-color="white">
             {{ index + 1 }} / {{ products.length }}
           </q-badge>
 
@@ -251,14 +251,21 @@ onMounted(async () => {
 }
 
 /* ── Foto ─────────────────────────────────────────────────────────── */
+/* Azul claro atrás da foto. As fotos do catálogo vêm com fundo branco chapado;
+   `multiply` faz esse branco virar o próprio azul do card (multiplicar por 1 não
+   muda nada), então o produto aparece recortado sobre o azul em vez de dentro de
+   um quadrado branco. Azul claro e não o da marca justamente por causa do
+   multiply: sobre um azul escuro o produto sairia quase preto.
+   `isolation` prende a mesclagem ao card — sem ela o blend pega o fundo da
+   página junto. */
 .foto {
   position: relative;
   flex: 1 1 55%;
   min-width: 0;
   border-radius: 14px;
   overflow: hidden;
-  background: #fff;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+  isolation: isolate;
+  background: #c5cae9;
 }
 
 .foto-img {
@@ -266,11 +273,11 @@ onMounted(async () => {
   height: 100%;
   object-fit: contain;
   display: block;
+  mix-blend-mode: multiply;
 }
 
 .foto-vazia {
   height: 100%;
-  background: #fafafa;
 }
 
 .contador {
@@ -354,14 +361,10 @@ onMounted(async () => {
   z-index: 10;
 }
 
-.body--dark .foto,
+/* A foto mantém o azul nos dois temas — é ele que dá o contraste com a embalagem. */
 .body--dark .controle,
 .body--dark .barra-envio {
   background: #1e1e2e;
   border-color: rgba(255, 255, 255, 0.12);
-}
-
-.body--dark .foto-vazia {
-  background: #262636;
 }
 </style>
