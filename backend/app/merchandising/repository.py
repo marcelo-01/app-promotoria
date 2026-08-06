@@ -1,0 +1,424 @@
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Optional, Sequence
+from uuid import UUID
+
+from sqlalchemy import and_, delete, func, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.infrastructure.persistence.models.customer import Customer, CustomerStatus
+from app.infrastructure.persistence.models.customer_product import CustomerProduct
+from app.infrastructure.persistence.models.product import Product
+from app.infrastructure.persistence.models.promoter_customer import PromoterCustomer
+from app.infrastructure.persistence.models.stock_visit import (
+    StockVisit, StockVisitItem, StockVisitStatus,
+)
+from app.infrastructure.persistence.models.user import User
+
+
+class MerchandisingRepository:
+
+    # ── Clientes do promotor ──────────────────────────────────────────────
+
+    @staticmethod
+    async def list_customers_for_promoter(
+        session: AsyncSession,
+        tenant_id: UUID,
+        user_id: Optional[UUID],
+        search: Optional[str] = None,
+    ) -> Sequence[tuple[Customer, Optional[datetime], bool]]:
+        """Clientes do promotor + data da última visita enviada + rascunho aberto.
+        `user_id=None` retorna todos os clientes do tenant (visão do admin)."""
+
+        last_visit = (
+            select(
+                StockVisit.customer_id.label("customer_id"),
+                func.max(StockVisit.submitted_at).label("last_visited_at"),
+            )
+            .where(
+                StockVisit.tenant_id == tenant_id,
+                StockVisit.status != StockVisitStatus.DRAFT.value,
+            )
+            .group_by(StockVisit.customer_id)
+            .subquery()
+        )
+
+        # Rascunho gravado no servidor para este promotor (o app também mantém
+        # rascunho local; este é o que sobrevive à troca de aparelho).
+        draft_condition = [
+            StockVisit.tenant_id == tenant_id,
+            StockVisit.customer_id == Customer.id,
+            StockVisit.status == StockVisitStatus.DRAFT.value,
+        ]
+        if user_id is not None:
+            draft_condition.append(StockVisit.promoter_id == user_id)
+
+        has_draft = (
+            select(func.count())
+            .select_from(StockVisit)
+            .where(*draft_condition)
+            .correlate(Customer)
+            .scalar_subquery()
+        )
+
+        query = (
+            select(Customer, last_visit.c.last_visited_at, has_draft)
+            .outerjoin(last_visit, last_visit.c.customer_id == Customer.id)
+            .where(
+                Customer.tenant_id == tenant_id,
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+        )
+
+        if user_id is not None:
+            query = query.join(
+                PromoterCustomer,
+                and_(
+                    PromoterCustomer.customer_id == Customer.id,
+                    PromoterCustomer.tenant_id == tenant_id,
+                    PromoterCustomer.user_id == user_id,
+                    PromoterCustomer.is_active.is_(True),
+                ),
+            )
+
+        if search:
+            like = f"%{search.strip()}%"
+            query = query.where(
+                or_(
+                    Customer.name.ilike(like),
+                    Customer.corporate_name.ilike(like),
+                    Customer.document.ilike(like),
+                )
+            )
+
+        query = query.order_by(Customer.name)
+        result = await session.execute(query)
+        return result.all()
+
+    @staticmethod
+    async def is_customer_assigned(
+        session: AsyncSession, tenant_id: UUID, user_id: UUID, customer_id: UUID
+    ) -> bool:
+        query = select(func.count()).select_from(PromoterCustomer).where(
+            PromoterCustomer.tenant_id == tenant_id,
+            PromoterCustomer.user_id == user_id,
+            PromoterCustomer.customer_id == customer_id,
+            PromoterCustomer.is_active.is_(True),
+        )
+        return bool((await session.execute(query)).scalar_one())
+
+    # ── Produtos para contagem ────────────────────────────────────────────
+
+    @staticmethod
+    async def list_mix_products(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID
+    ) -> Sequence[tuple[Product, int]]:
+        query = (
+            select(Product, CustomerProduct.position)
+            .join(
+                CustomerProduct,
+                and_(
+                    CustomerProduct.product_id == Product.id,
+                    CustomerProduct.tenant_id == tenant_id,
+                    CustomerProduct.customer_id == customer_id,
+                ),
+            )
+            .where(Product.tenant_id == tenant_id, Product.is_active.is_(True))
+            .order_by(CustomerProduct.position, Product.name)
+        )
+        return (await session.execute(query)).all()
+
+    @staticmethod
+    async def list_mix_product_ids(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID
+    ) -> list[UUID]:
+        query = (
+            select(CustomerProduct.product_id)
+            .where(
+                CustomerProduct.tenant_id == tenant_id,
+                CustomerProduct.customer_id == customer_id,
+            )
+            .order_by(CustomerProduct.position)
+        )
+        return list((await session.execute(query)).scalars().all())
+
+    @staticmethod
+    async def list_all_products(
+        session: AsyncSession, tenant_id: UUID, search: Optional[str] = None
+    ) -> Sequence[Product]:
+        query = select(Product).where(
+            Product.tenant_id == tenant_id, Product.is_active.is_(True)
+        )
+        if search:
+            like = f"%{search.strip()}%"
+            query = query.where(
+                or_(Product.name.ilike(like), Product.sku.ilike(like), Product.barcode.ilike(like))
+            )
+        query = query.order_by(Product.name)
+        return (await session.execute(query)).scalars().all()
+
+    @staticmethod
+    async def last_quantities_for_customer(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID
+    ) -> dict[UUID, object]:
+        """Quantidades da última visita enviada nesse cliente: {product_id: quantity}."""
+        last_visit_id = (
+            select(StockVisit.id)
+            .where(
+                StockVisit.tenant_id == tenant_id,
+                StockVisit.customer_id == customer_id,
+                StockVisit.status != StockVisitStatus.DRAFT.value,
+            )
+            .order_by(StockVisit.submitted_at.desc())
+            .limit(1)
+            .scalar_subquery()
+        )
+        query = select(StockVisitItem.product_id, StockVisitItem.quantity).where(
+            StockVisitItem.tenant_id == tenant_id,
+            StockVisitItem.visit_id == last_visit_id,
+        )
+        return {row[0]: row[1] for row in (await session.execute(query)).all()}
+
+    # ── Visitas ───────────────────────────────────────────────────────────
+
+    @staticmethod
+    async def get_visit(
+        session: AsyncSession, tenant_id: UUID, visit_id: UUID
+    ) -> Optional[StockVisit]:
+        query = select(StockVisit).where(
+            StockVisit.tenant_id == tenant_id, StockVisit.id == visit_id
+        )
+        return (await session.execute(query)).scalars().first()
+
+    @staticmethod
+    async def get_visit_detail(
+        session: AsyncSession, tenant_id: UUID, visit_id: UUID
+    ) -> Optional[tuple[StockVisit, Optional[str], Optional[str], Optional[str]]]:
+        """Visita + nome/documento do cliente + nome do promotor, em UMA query."""
+        query = (
+            select(StockVisit, Customer.name, Customer.document, User.full_name)
+            .join(Customer, Customer.id == StockVisit.customer_id, isouter=True)
+            .join(User, User.id == StockVisit.promoter_id, isouter=True)
+            .where(StockVisit.tenant_id == tenant_id, StockVisit.id == visit_id)
+        )
+        return (await session.execute(query)).first()
+
+    @staticmethod
+    async def get_visit_by_client_uuid(
+        session: AsyncSession, tenant_id: UUID, client_uuid: str
+    ) -> Optional[StockVisit]:
+        query = select(StockVisit).where(
+            StockVisit.tenant_id == tenant_id, StockVisit.client_uuid == client_uuid
+        )
+        return (await session.execute(query)).scalars().first()
+
+    @staticmethod
+    async def save_visit(session: AsyncSession, visit: StockVisit) -> StockVisit:
+        session.add(visit)
+        await session.commit()
+        await session.refresh(visit)
+        return visit
+
+    @staticmethod
+    async def replace_items(
+        session: AsyncSession, visit_id: UUID, items: list[StockVisitItem]
+    ) -> None:
+        await session.execute(
+            delete(StockVisitItem).where(StockVisitItem.visit_id == visit_id)
+        )
+        for item in items:
+            session.add(item)
+        await session.commit()
+
+    @staticmethod
+    async def list_items(
+        session: AsyncSession, visit_id: UUID
+    ) -> Sequence[tuple[StockVisitItem, str, str, str]]:
+        query = (
+            select(StockVisitItem, Product.sku, Product.name, Product.unit)
+            .join(Product, Product.id == StockVisitItem.product_id, isouter=True)
+            .where(StockVisitItem.visit_id == visit_id)
+            .order_by(Product.name)
+        )
+        return (await session.execute(query)).all()
+
+    @staticmethod
+    async def list_visits(
+        session: AsyncSession,
+        tenant_id: UUID,
+        promoter_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        status: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[Sequence[tuple[StockVisit, str, str, str, int]], int]:
+        items_count = (
+            select(func.count())
+            .select_from(StockVisitItem)
+            .where(StockVisitItem.visit_id == StockVisit.id)
+            .correlate(StockVisit)
+            .scalar_subquery()
+        )
+
+        base = (
+            select(StockVisit, Customer.name, Customer.document, User.full_name, items_count)
+            .join(Customer, Customer.id == StockVisit.customer_id, isouter=True)
+            .join(User, User.id == StockVisit.promoter_id, isouter=True)
+            .where(StockVisit.tenant_id == tenant_id)
+        )
+
+        if promoter_id:
+            base = base.where(StockVisit.promoter_id == promoter_id)
+        if customer_id:
+            base = base.where(StockVisit.customer_id == customer_id)
+        if status:
+            base = base.where(StockVisit.status == status)
+        if date_from:
+            base = base.where(StockVisit.visited_at >= date_from)
+        if date_to:
+            base = base.where(StockVisit.visited_at <= date_to)
+
+        total = (
+            await session.execute(
+                select(func.count()).select_from(base.subquery())
+            )
+        ).scalar_one()
+
+        rows = (
+            await session.execute(
+                base.order_by(StockVisit.visited_at.desc().nullslast(),
+                              StockVisit.created_at.desc())
+                .limit(limit)
+                .offset(offset)
+            )
+        ).all()
+
+        return rows, total
+
+    @staticmethod
+    async def export_rows(
+        session: AsyncSession,
+        tenant_id: UUID,
+        visit_ids: Optional[list[UUID]] = None,
+        promoter_id: Optional[UUID] = None,
+        customer_id: Optional[UUID] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+    ) -> Sequence:
+        """Linhas achatadas (uma por item) prontas para a planilha."""
+        query = (
+            select(
+                StockVisit.id.label("visit_id"),
+                StockVisit.visited_at,
+                StockVisit.submitted_at,
+                Customer.document,
+                Customer.name.label("customer_name"),
+                User.full_name.label("promoter_name"),
+                Product.sku,
+                Product.barcode,
+                Product.name.label("product_name"),
+                Product.unit,
+                StockVisitItem.quantity,
+                StockVisitItem.expires_at,
+                StockVisitItem.notes,
+                StockVisit.notes.label("visit_notes"),
+            )
+            .select_from(StockVisitItem)
+            .join(StockVisit, StockVisit.id == StockVisitItem.visit_id)
+            .join(Customer, Customer.id == StockVisit.customer_id, isouter=True)
+            .join(User, User.id == StockVisit.promoter_id, isouter=True)
+            .join(Product, Product.id == StockVisitItem.product_id, isouter=True)
+            .where(
+                StockVisit.tenant_id == tenant_id,
+                StockVisit.status != StockVisitStatus.DRAFT.value,
+            )
+        )
+
+        if visit_ids:
+            query = query.where(StockVisit.id.in_(visit_ids))
+        if promoter_id:
+            query = query.where(StockVisit.promoter_id == promoter_id)
+        if customer_id:
+            query = query.where(StockVisit.customer_id == customer_id)
+        if date_from:
+            query = query.where(StockVisit.visited_at >= date_from)
+        if date_to:
+            query = query.where(StockVisit.visited_at <= date_to)
+
+        query = query.order_by(StockVisit.visited_at, Customer.name, Product.name)
+        return (await session.execute(query)).all()
+
+    @staticmethod
+    async def mark_exported(
+        session: AsyncSession, tenant_id: UUID, visit_ids: list[UUID], moment: datetime
+    ) -> None:
+        """Marca as visitas que acabaram de entrar numa planilha baixada.
+
+        É isso que faz o promotor ver 'já processada' na tela de envios e o admin
+        distinguir o que ainda não foi baixado. Só sai de `submitted`.
+        """
+        if not visit_ids:
+            return
+        await session.execute(
+            update(StockVisit)
+            .where(
+                StockVisit.tenant_id == tenant_id,
+                StockVisit.id.in_(visit_ids),
+                StockVisit.status == StockVisitStatus.SUBMITTED.value,
+            )
+            .values(status=StockVisitStatus.EXPORTED.value, exported_at=moment)
+        )
+        await session.commit()
+
+    # ── Vínculos e mix (admin) ────────────────────────────────────────────
+
+    @staticmethod
+    async def replace_assignments(
+        session: AsyncSession, tenant_id: UUID, user_id: UUID, customer_ids: list[UUID]
+    ) -> None:
+        await session.execute(
+            delete(PromoterCustomer).where(
+                PromoterCustomer.tenant_id == tenant_id,
+                PromoterCustomer.user_id == user_id,
+            )
+        )
+        for customer_id in customer_ids:
+            session.add(
+                PromoterCustomer(
+                    tenant_id=tenant_id, user_id=user_id,
+                    customer_id=customer_id, is_active=True,
+                )
+            )
+        await session.commit()
+
+    @staticmethod
+    async def replace_mix(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, product_ids: list[UUID]
+    ) -> None:
+        await session.execute(
+            delete(CustomerProduct).where(
+                CustomerProduct.tenant_id == tenant_id,
+                CustomerProduct.customer_id == customer_id,
+            )
+        )
+        for position, product_id in enumerate(product_ids):
+            session.add(
+                CustomerProduct(
+                    tenant_id=tenant_id, customer_id=customer_id,
+                    product_id=product_id, position=position,
+                )
+            )
+        await session.commit()
+
+    @staticmethod
+    async def list_assigned_customer_ids(
+        session: AsyncSession, tenant_id: UUID, user_id: UUID
+    ) -> list[UUID]:
+        query = select(PromoterCustomer.customer_id).where(
+            PromoterCustomer.tenant_id == tenant_id,
+            PromoterCustomer.user_id == user_id,
+        )
+        return list((await session.execute(query)).scalars().all())
