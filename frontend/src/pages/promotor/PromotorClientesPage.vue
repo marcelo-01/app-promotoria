@@ -2,6 +2,11 @@
   Tela inicial do promotor: um card grande por cliente, com os dois destinos de
   contagem lado a lado. Card grande e botão grande porque isso é usado em pé,
   no corredor do mercado, com uma mão só.
+
+  O visto verde em cima do botão responde à única pergunta que o promotor faz
+  ao chegar na loja: "já contei aqui hoje?". Ele aparece quando a contagem
+  daquele tipo foi enviada hoje e some sozinho na virada do dia — não há nada
+  agendado às 00:00, a marca é comparada com a data de hoje toda vez.
 -->
 <template>
   <q-page class="q-pa-md">
@@ -38,19 +43,35 @@
             <q-btn
               stack unelevated no-caps
               class="full-width acao-btn"
+              :class="{ 'acao-btn--feita': concluido(customer, tipo.value) }"
               :color="tipo.color" :icon="tipo.icon"
               @click="abrir(customer, tipo.value)"
             >
               <div class="text-subtitle2 text-weight-bold q-mt-xs">{{ tipo.label }}</div>
+
+              <!-- Contagem enviada hoje: o visto. Ainda na fila: a nuvem. -->
               <q-badge
-                v-if="pendente(customer.id, tipo.value)"
+                v-if="concluido(customer, tipo.value)"
+                floating rounded class="marca-feita"
+                :color="visita.aguardandoEnvio(customer.id, tipo.value) ? 'warning' : 'positive'"
+                :text-color="visita.aguardandoEnvio(customer.id, tipo.value) ? 'dark' : 'white'"
+              >
+                <q-icon
+                  size="18px"
+                  :name="visita.aguardandoEnvio(customer.id, tipo.value)
+                    ? 'cloud_upload' : 'check'"
+                />
+              </q-badge>
+
+              <q-badge
+                v-else-if="pendente(customer.id, tipo.value)"
                 color="warning" text-color="dark" floating
               >
                 {{ pendente(customer.id, tipo.value) }}
               </q-badge>
             </q-btn>
-            <div class="text-caption text-grey-7 text-center q-mt-xs">
-              {{ ultimaContagem(customer, tipo.value) }}
+            <div class="text-caption text-center q-mt-xs" :class="legenda(customer, tipo.value).cor">
+              {{ legenda(customer, tipo.value).texto }}
             </div>
           </div>
         </q-card-section>
@@ -64,7 +85,7 @@ import { onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { merchandisingApi } from '@/api/merchandising'
-import { useVisitaStore } from '@/stores/visita'
+import { diaLocal, useVisitaStore } from '@/stores/visita'
 
 const router = useRouter()
 const $q = useQuasar()
@@ -110,9 +131,32 @@ function abrir(customer, tipo) {
   })
 }
 
-function ultimaContagem(customer, tipo) {
-  const iso = tipo === 'gondola' ? customer.last_gondola_at : customer.last_estoque_at
-  return iso ? new Date(iso).toLocaleDateString('pt-BR') : 'nunca contado'
+const ultimaContagem = (customer, tipo) =>
+  tipo === 'gondola' ? customer.last_gondola_at : customer.last_estoque_at
+
+/**
+ * Contado hoje? Vale a marca deste aparelho (funciona offline, aparece na hora)
+ * ou a data que o servidor devolveu — que cobre a contagem feita em outro
+ * aparelho ou antes de reinstalar o app.
+ */
+function concluido(customer, tipo) {
+  if (visita.concluidaHoje(customer.id, tipo)) return true
+  const iso = ultimaContagem(customer, tipo)
+  return Boolean(iso) && diaLocal(iso) === diaLocal()
+}
+
+function legenda(customer, tipo) {
+  if (visita.aguardandoEnvio(customer.id, tipo)) {
+    return { texto: 'contado — aguardando envio', cor: 'text-orange-9' }
+  }
+  if (concluido(customer, tipo)) {
+    return { texto: 'contado hoje', cor: 'text-positive text-weight-bold' }
+  }
+  const iso = ultimaContagem(customer, tipo)
+  return {
+    texto: iso ? new Date(iso).toLocaleDateString('pt-BR') : 'nunca contado',
+    cor: 'text-grey-7',
+  }
 }
 
 onMounted(carregar)
@@ -132,5 +176,20 @@ onUnmounted(() => clearTimeout(debounce))
 
 .acao-btn :deep(.q-icon) {
   font-size: 34px;
+}
+
+/* Já contado hoje: o botão continua clicável (dá para recontar), mas recua
+   visualmente para o que falta contar saltar aos olhos. */
+.acao-btn--feita {
+  opacity: 0.62;
+}
+
+.marca-feita {
+  padding: 4px;
+  border: 2px solid #fff;
+}
+
+.marca-feita :deep(.q-icon) {
+  font-size: 18px;
 }
 </style>

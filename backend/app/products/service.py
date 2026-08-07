@@ -36,7 +36,12 @@ class ProductsService:
     async def create(
         session: AsyncSession, tenant_id: UUID, payload: ProductCreate
     ) -> Product:
-        product = Product(id=uuid4(), tenant_id=tenant_id, name=payload.name)
+        product = Product(
+            id=uuid4(),
+            tenant_id=tenant_id,
+            name=payload.name,
+            package_size=payload.package_size,
+        )
         return await Repo.save(session, product)
 
     @staticmethod

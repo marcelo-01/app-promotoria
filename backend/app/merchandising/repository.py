@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional, Sequence
 from uuid import UUID
 
@@ -137,6 +138,26 @@ class MerchandisingRepository:
         return (await session.execute(query)).scalars().all()
 
     @staticmethod
+    async def package_sizes(
+        session: AsyncSession, tenant_id: UUID, product_ids: list[UUID]
+    ) -> dict[UUID, Decimal]:
+        """{product_id: unidades por caixa} — o fator que converte a contagem.
+
+        `package_size` nulo ou zero vira 1: produto sem caixa cadastrada é
+        contado como se a "caixa" fosse a própria unidade, nunca como zero.
+        """
+        if not product_ids:
+            return {}
+
+        query = select(Product.id, Product.package_size).where(
+            Product.tenant_id == tenant_id, Product.id.in_(product_ids)
+        )
+        return {
+            product_id: Decimal(size) if size else Decimal(1)
+            for product_id, size in (await session.execute(query)).all()
+        }
+
+    @staticmethod
     async def last_quantities_for_customer(
         session: AsyncSession, tenant_id: UUID, customer_id: UUID, visit_type: str
     ) -> dict[UUID, tuple]:
@@ -158,14 +179,17 @@ class MerchandisingRepository:
             .scalar_subquery()
         )
         query = select(
-            StockVisitItem.product_id, StockVisitItem.quantity, StockVisitItem.unit_type
+            StockVisitItem.product_id,
+            StockVisitItem.boxes,
+            StockVisitItem.units,
+            StockVisitItem.quantity,
         ).where(
             StockVisitItem.tenant_id == tenant_id,
             StockVisitItem.visit_id == last_visit_id,
         )
         return {
-            product_id: (quantity, unit_type)
-            for product_id, quantity, unit_type in (await session.execute(query)).all()
+            product_id: (boxes, units, quantity)
+            for product_id, boxes, units, quantity in (await session.execute(query)).all()
         }
 
     # ── Visitas ───────────────────────────────────────────────────────────
@@ -310,8 +334,13 @@ class MerchandisingRepository:
                 Customer.name.label("customer_name"),
                 User.full_name.label("promoter_name"),
                 Product.name.label("product_name"),
+                # A planilha entrega o total em unidades, mas mostra também o que
+                # o promotor digitou e o fator usado — é como o administrador
+                # confere a conversão sem abrir o app.
+                Product.package_size,
+                StockVisitItem.boxes,
+                StockVisitItem.units,
                 StockVisitItem.quantity,
-                StockVisitItem.unit_type,
             )
             .select_from(StockVisitItem)
             .join(StockVisit, StockVisit.id == StockVisitItem.visit_id)

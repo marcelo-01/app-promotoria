@@ -11,15 +11,18 @@ arbitrárias e não são (as "6 âncoras", seção 3 do plano).
 ## O fluxo
 
 **Promotor** (celular, PWA): escolhe o cliente → escolhe **gôndola** ou **estoque** →
-um produto por tela (foto grande à esquerda, quantidade à direita, em caixas ou
-unidades) → envia. Produto sem número digitado não é enviado.
+um produto por tela (foto grande na metade de cima, dois campos embaixo: **caixas**
+e **unidades avulsas**) → envia. Produto sem nenhum número digitado não é enviado.
+Enviou, o cliente ganha um **visto verde** naquele tipo de contagem, que some
+sozinho na virada do dia.
 
-**Administrador** (desktop): cadastra clientes (só o nome), produtos (nome e foto)
-e promotores (nome, e-mail e senha), define quais clientes cada promotor atende, e
-baixa as contagens em planilha `.xlsx`.
+**Administrador** (desktop): cadastra clientes (só o nome), produtos (nome, foto e
+quantas unidades vêm numa caixa) e promotores (nome, e-mail e senha), define quais
+clientes cada promotor atende, e baixa as contagens em planilha `.xlsx` — já com
+as caixas convertidas em unidades.
 
 Gôndola e estoque do mesmo cliente são contagens independentes: cada uma tem sua
-data, sua planilha e sua "contagem anterior".
+data, sua planilha, sua "contagem anterior" e seu visto do dia.
 
 ## Stack
 
@@ -60,8 +63,10 @@ Usuários criados pelo `seed`:
 
 1. Entre como `admin`.
 2. **Cadastros → Clientes** e **→ Produtos** → cadastre os clientes (só o nome) e os
-   produtos (nome + foto). A foto é o que o promotor usa para reconhecer a
-   embalagem na gôndola, então vale tirar uma boa.
+   produtos (nome + foto + unidades por caixa). A foto é o que o promotor usa para
+   reconhecer a embalagem na gôndola, então vale tirar uma boa; as unidades por
+   caixa são o que converte a contagem na planilha (produto vendido só a granel
+   fica com 1).
 3. **Cadastros → Promotores** → crie o promotor com nome, e-mail e senha.
 4. **Clientes por promotor** → marque quais clientes ele atende e salve.
 5. *(Opcional)* **Cadastros → Mix por cliente** → escolha quais produtos são
@@ -128,9 +133,20 @@ ou `products/` — se a fronteira estiver limpa, a fusão é copiar duas pastas.
   o catálogo inteiro de uma vez; foto embutida no JSON inviabilizaria isso no sinal
   de um supermercado. Em disco, o service worker cacheia cada foto e a contagem
   funciona offline.
-- **`visit_type` (`gondola`/`estoque`) na visita e `unit_type` (`caixa`/`unidade`)
-  no item.** O promotor conta os dois lugares separadamente e escolhe a unidade
-  produto a produto.
+- **`visit_type` (`gondola`/`estoque`) na visita.** O promotor conta os dois lugares
+  separadamente.
+- **`boxes` e `units` no item, e `quantity` com o total convertido.** O cliente tem
+  "1 caixa e 5 unidades" do mesmo produto — não uma coisa ou outra. Os dois números
+  ficam gravados como foram digitados; `quantity` guarda
+  `boxes * products.package_size + units`, que é o número que a planilha entrega.
+  A planilha refaz essa conta com o `package_size` de hoje, para que corrigir o
+  cadastro do produto conserte também as contagens já recebidas. `unit_type`
+  sobreviveu como coluna, sempre `unidade` — é a unidade de `quantity`.
+- **O "contado hoje" é uma data, não um flag.** O visto verde no card do cliente
+  compara a data do último envio com a de hoje. Ninguém zera nada às 00:00: a marca
+  de ontem simplesmente deixa de ser a de hoje. Vale a marca local do aparelho
+  (aparece na hora, funciona offline) ou a data que veio do servidor (cobre a
+  contagem feita em outro aparelho).
 - **`client_uuid` nas visitas.** O celular gera o UUID; reenviar a mesma contagem
   faz `UPDATE`, não duplica. É o que salva a contagem feita com sinal ruim.
 - **Prefixo `/merchandising`** em todas as rotas do domínio de coleta, para que o

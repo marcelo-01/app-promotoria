@@ -126,13 +126,15 @@
           <q-item v-for="item in detalhe?.items || []" :key="item.id">
             <q-item-section>
               <q-item-label>{{ item.product_name }}</q-item-label>
-              <q-item-label v-if="item.expires_at || item.notes" caption>
-                <span v-if="item.expires_at">validade {{ formatDia(item.expires_at) }}</span>
+              <!-- O que o promotor digitou, antes da conversão em unidades -->
+              <q-item-label caption>
+                {{ digitado(item) }}
+                <span v-if="item.expires_at"> · validade {{ formatDia(item.expires_at) }}</span>
                 <span v-if="item.notes"> · {{ item.notes }}</span>
               </q-item-label>
             </q-item-section>
             <q-item-section side class="text-weight-bold text-primary">
-              {{ formatQtd(item.quantity) }} {{ item.unit_type === 'caixa' ? 'cx' : 'un' }}
+              {{ formatQtd(item.quantity) }} un
             </q-item-section>
           </q-item>
         </q-list>
@@ -171,6 +173,14 @@ const formatData = (v) => (v ? new Date(v).toLocaleString('pt-BR') : '—')
 const formatDia = (v) => (v ? new Date(`${v}T00:00:00`).toLocaleDateString('pt-BR') : '—')
 const formatQtd = (v) => Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
 const rotuloTipo = (v) => (v === 'gondola' ? 'Gôndola' : 'Estoque')
+
+/** "2 cx + 5 un" — o que foi contado, do jeito que foi contado. */
+function digitado(item) {
+  const partes = []
+  if (Number(item.boxes)) partes.push(`${formatQtd(item.boxes)} cx`)
+  if (Number(item.units)) partes.push(`${formatQtd(item.units)} un`)
+  return partes.length ? partes.join(' + ') : 'nada encontrado'
+}
 
 const colunas = [
   { name: 'visited_at', label: 'Data', field: 'visited_at', align: 'left',

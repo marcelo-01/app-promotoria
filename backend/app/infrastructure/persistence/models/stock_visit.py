@@ -24,7 +24,13 @@ class VisitType(str, enum.Enum):
 
 
 class UnitType(str, enum.Enum):
-    """Como o promotor contou aquele item — ele escolhe na hora, por produto."""
+    """Unidade em que `quantity` está expressa.
+
+    Hoje o promotor digita caixas e unidades avulsas no mesmo produto (`boxes` e
+    `units`), e `quantity` guarda sempre o total convertido em unidades — ou
+    seja, todo item novo nasce com `UNIDADE`. `CAIXA` só aparece em itens
+    gravados antes da migração 003.
+    """
 
     CAIXA = "caixa"
     UNIDADE = "unidade"
@@ -76,9 +82,17 @@ class StockVisitItem(DeclarativeBase, TimestampMixin):
     visit_id = Column(UUID(as_uuid=True), ForeignKey("stock_visits.id", ondelete="CASCADE"), nullable=False)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
 
-    # Numeric(15,3): mesmo tipo de products.stock e order_items.quantity no ERP
+    # O que o promotor digitou, nos dois campos da tela: o cliente costuma ter
+    # caixas fechadas E unidades soltas do mesmo produto ("1 caixa e 5 unidades").
+    boxes = Column(Numeric(15, 3), nullable=False, default=0)
+    units = Column(Numeric(15, 3), nullable=False, default=0)
+
+    # Total convertido: boxes * products.package_size + units. Gravado no envio
+    # para que qualquer leitura (contagem anterior, detalhe da visita) tenha um
+    # número só, sem repetir a conversão. Numeric(15,3): mesmo tipo de
+    # products.stock e order_items.quantity no ERP.
     quantity = Column(Numeric(15, 3), nullable=False, default=0)
-    # caixa | unidade — escolhido pelo promotor em cada produto
+    # Unidade de `quantity` — sempre "unidade" desde a migração 003
     unit_type = Column(String(10), nullable=False, default=UnitType.UNIDADE.value)
     # Laticínio é perecível — validade é informação de negócio, não detalhe
     expires_at = Column(Date, nullable=True)

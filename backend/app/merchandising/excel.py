@@ -18,18 +18,37 @@ _HEADERS = [
     ("Promotor", 24),
     ("Contagem", 12),
     ("Produto", 40),
-    ("Quantidade", 14),
-    ("Unidade", 12),
+    ("Caixas", 10),
+    ("Unidades avulsas", 17),
+    ("Un. por caixa", 14),
+    ("Total (unidades)", 17),
 ]
 
-# Coluna de quantidade — usada para formatar os números depois de preencher
-_QUANTITY_COLUMN = 6
+# Colunas numéricas — formatadas depois de preencher. A última é o total.
+_FIRST_NUMBER_COLUMN = 6
+_TOTAL_COLUMN = len(_HEADERS)
 
 _HEADER_FILL = PatternFill("solid", fgColor="1A237E")   # mesma cor primária do ERP
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
+_TOTAL_FONT = Font(bold=True)
 
 _VISIT_TYPE_LABEL = {"gondola": "Gôndola", "estoque": "Estoque"}
-_UNIT_TYPE_LABEL = {"caixa": "Caixa", "unidade": "Unidade"}
+
+
+def _package_size(row) -> float:
+    """Unidades por caixa do produto. Nulo ou zero vira 1 — produto sem caixa
+    cadastrada é contado como se a caixa fosse a própria unidade."""
+    return float(row.package_size) if row.package_size else 1.0
+
+
+def _total_units(row) -> float:
+    """A conversão que o administrador espera: 1 caixa de 10 + 10 avulsas = 20.
+
+    Recalculada aqui, com o `package_size` de hoje, em vez de usar o total
+    gravado na contagem: se o cadastro do produto for corrigido, a planilha
+    seguinte já sai certa — inclusive para contagens antigas.
+    """
+    return float(row.boxes or 0) * _package_size(row) + float(row.units or 0)
 
 
 def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
@@ -52,8 +71,10 @@ def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
             r.promoter_name or "",
             _VISIT_TYPE_LABEL.get(r.visit_type, r.visit_type or ""),
             r.product_name or "",
-            float(r.quantity) if r.quantity is not None else 0.0,
-            _UNIT_TYPE_LABEL.get(r.unit_type, r.unit_type or ""),
+            float(r.boxes or 0),
+            float(r.units or 0),
+            _package_size(r),
+            _total_units(r),
         ])
 
     # Congela o cabeçalho e liga o autofiltro — o administrador vai filtrar muito
@@ -61,10 +82,11 @@ def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
     ws.auto_filter.ref = f"A1:{get_column_letter(len(_HEADERS))}{ws.max_row}"
 
     for row in ws.iter_rows(
-        min_row=2, min_col=_QUANTITY_COLUMN, max_col=_QUANTITY_COLUMN
+        min_row=2, min_col=_FIRST_NUMBER_COLUMN, max_col=_TOTAL_COLUMN
     ):
         for cell in row:
             cell.number_format = "#,##0.###"
+        row[-1].font = _TOTAL_FONT
 
     buf = BytesIO()
     wb.save(buf)

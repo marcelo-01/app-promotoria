@@ -4,12 +4,29 @@ import { merchandisingApi } from '@/api/merchandising'
 
 const DRAFTS_KEY = 'estoque_drafts'
 const QUEUE_KEY = 'estoque_queue'
+const DONE_KEY = 'estoque_concluidas'
 
 const load = (key) => JSON.parse(localStorage.getItem(key) || '{}')
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value))
 
 /** Gôndola e estoque do mesmo cliente são contagens independentes. */
 export const draftKey = (customerId, visitType) => `${customerId}|${visitType}`
+
+/**
+ * Dia local em YYYY-MM-DD.
+ *
+ * É o que zera o "concluído" à meia-noite sem relógio nem tarefa agendada: a
+ * marca guarda o dia em que a contagem foi enviada e a tela só a considera se
+ * for o dia de hoje. Passou das 00:00, a marca de ontem deixa de valer sozinha.
+ */
+export function diaLocal(value = new Date()) {
+  const d = new Date(value)
+  return [
+    d.getFullYear(),
+    String(d.getMonth() + 1).padStart(2, '0'),
+    String(d.getDate()).padStart(2, '0'),
+  ].join('-')
+}
 
 /**
  * Rascunhos do formato antigo (chave = só o customerId, sem tipo de contagem)
@@ -19,6 +36,34 @@ export const draftKey = (customerId, visitType) => `${customerId}|${visitType}`
 function dropLegacyDrafts(all) {
   Object.keys(all).forEach((key) => {
     if (!key.includes('|')) delete all[key]
+  })
+  return all
+}
+
+/**
+ * Itens gravados quando a contagem era um número só + a unidade escolhida.
+ * Viram caixas ou unidades avulsas conforme aquela escolha.
+ */
+function migrateItems(all) {
+  Object.values(all).forEach((draft) => {
+    Object.values(draft.items || {}).forEach((item) => {
+      if (item.boxes !== undefined || item.units !== undefined) return
+      const quantidade = Number(item.quantity) || 0
+      const eraCaixa = item.unit_type === 'caixa'
+      item.boxes = eraCaixa ? quantidade : null
+      item.units = eraCaixa ? null : quantidade
+      delete item.quantity
+      delete item.unit_type
+    })
+  })
+  return all
+}
+
+/** Marcas de outros dias não interessam a ninguém — não ficam no aparelho. */
+function dropOldMarks(all) {
+  const hoje = diaLocal()
+  Object.keys(all).forEach((key) => {
+    if (all[key]?.dia !== hoje) delete all[key]
   })
   return all
 }
@@ -33,15 +78,22 @@ const newUuid = () =>
         return v.toString(16)
       })
 
+/** '' / null viram null (não contado); qualquer número vira número. */
+const numero = (value) =>
+  value === null || value === undefined || value === '' ? null : Number(value)
+
 export const useVisitaStore = defineStore('visita', () => {
   // { [customerId|visitType]: { client_uuid, visited_at, items: { [productId]: {...} } } }
-  const drafts = ref(dropLegacyDrafts(load(DRAFTS_KEY)))
+  const drafts = ref(migrateItems(dropLegacyDrafts(load(DRAFTS_KEY))))
   // Contagens fechadas que ainda não subiram
   const queue = ref(JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'))
+  // { [customerId|visitType]: { dia, pendente } } — o "já contei aqui hoje"
+  const concluidas = ref(dropOldMarks(load(DONE_KEY)))
   const sending = ref(false)
 
   const persist = () => {
     save(DRAFTS_KEY, drafts.value)
+    save(DONE_KEY, concluidas.value)
     localStorage.setItem(QUEUE_KEY, JSON.stringify(queue.value))
   }
 
@@ -62,17 +114,18 @@ export const useVisitaStore = defineStore('visita', () => {
     return drafts.value[key]
   }
 
-  /** Quantidade vazia (null/'') apaga o item: produto em branco é produto não contado. */
-  function setItem(customerId, visitType, productId, { quantity, unit_type }) {
+  /** Os dois campos vazios apagam o item: produto em branco é produto não contado.
+   *  Campo em branco fica `null` (e não 0) para a tela reabrir exatamente como
+   *  o promotor deixou — 0 digitado é uma afirmação, branco não é. */
+  function setItem(customerId, visitType, productId, { boxes, units }) {
     const draft = getDraft(customerId, visitType)
-    if (quantity === null || quantity === undefined || quantity === '') {
+    const caixas = numero(boxes)
+    const unidades = numero(units)
+
+    if (caixas === null && unidades === null) {
       delete draft.items[productId]
     } else {
-      draft.items[productId] = {
-        product_id: productId,
-        quantity: Number(quantity),
-        unit_type: unit_type || 'unidade',
-      }
+      draft.items[productId] = { product_id: productId, boxes: caixas, units: unidades }
     }
     persist()
   }
@@ -86,6 +139,24 @@ export const useVisitaStore = defineStore('visita', () => {
     persist()
   }
 
+  // ── "Já contei aqui hoje" ───────────────────────────────────────────────
+
+  /** Marca a contagem como feita hoje. `pendente` = fechada mas ainda na fila. */
+  function marcarConcluida(customerId, visitType, pendente = false) {
+    concluidas.value[draftKey(customerId, visitType)] = { dia: diaLocal(), pendente }
+    persist()
+  }
+
+  const marcaDeHoje = (customerId, visitType) => {
+    const marca = concluidas.value[draftKey(customerId, visitType)]
+    return marca?.dia === diaLocal() ? marca : null
+  }
+
+  const concluidaHoje = (customerId, visitType) => Boolean(marcaDeHoje(customerId, visitType))
+
+  const aguardandoEnvio = (customerId, visitType) =>
+    marcaDeHoje(customerId, visitType)?.pendente === true
+
   /** Fecha a contagem: tenta enviar; se falhar, enfileira para reenvio. */
   async function submit(customerId, visitType) {
     const draft = getDraft(customerId, visitType)
@@ -94,17 +165,26 @@ export const useVisitaStore = defineStore('visita', () => {
       visit_type: visitType,
       client_uuid: draft.client_uuid,
       visited_at: draft.visited_at,
-      items: Object.values(draft.items),
+      // Campo deixado em branco vira 0 só aqui, na hora de fechar a contagem
+      items: Object.values(draft.items).map((item) => ({
+        product_id: item.product_id,
+        boxes: item.boxes || 0,
+        units: item.units || 0,
+      })),
       submit: true,
     }
 
     try {
       await merchandisingApi.saveVisit(payload)
       clearDraft(customerId, visitType)
+      marcarConcluida(customerId, visitType)
       return { sent: true }
     } catch (error) {
       queue.value.push(payload)
       clearDraft(customerId, visitType)
+      // Sem sinal, o promotor contou do mesmo jeito: o cliente aparece como
+      // concluído, só que avisando que o envio ainda não subiu.
+      marcarConcluida(customerId, visitType, true)
       persist()
       return { sent: false, error }
     }
@@ -123,6 +203,10 @@ export const useVisitaStore = defineStore('visita', () => {
       try {
         await merchandisingApi.saveVisit(payload)
         sent += 1
+        // Só tira o "aguardando envio" se a marca for de hoje: contagem de
+        // ontem que subiu agora não acende o concluído de hoje.
+        const marca = marcaDeHoje(payload.customer_id, payload.visit_type)
+        if (marca) marca.pendente = false
       } catch (error) {
         // 4xx é erro de dados (cliente removido, contagem já exportada): reenviar
         // não resolve e a fila entupiria para sempre. Só 5xx/rede voltam à fila.
@@ -142,7 +226,8 @@ export const useVisitaStore = defineStore('visita', () => {
   }
 
   return {
-    drafts, queue, sending, pendingCount,
+    drafts, queue, concluidas, sending, pendingCount,
     getDraft, setItem, itemsCount, clearDraft, submit, flushQueue,
+    marcarConcluida, concluidaHoje, aguardandoEnvio,
   }
 })

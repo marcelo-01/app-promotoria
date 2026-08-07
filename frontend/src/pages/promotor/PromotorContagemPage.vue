@@ -2,9 +2,11 @@
   Contagem de um cliente, em um dos dois lugares (gôndola ou estoque).
 
   Um produto por tela: o promotor tem o celular numa mão e o produto na outra,
-  então a foto precisa ser grande o bastante para reconhecer a embalagem sem ler
-  nada, e o campo de quantidade precisa estar sempre no mesmo lugar. Arrastar
-  para baixo passa para o próximo produto (scroll-snap), e produto sem número
+  então a foto ocupa a metade de cima — grande o bastante para reconhecer a
+  embalagem sem ler nada — e a metade de baixo traz os dois quadrados de
+  quantidade. São dois porque o cliente quase nunca tem só caixas ou só
+  unidades: tem "1 caixa e 5 unidades" do mesmo produto. Arrastar para baixo
+  passa para o próximo produto (scroll-snap), e produto sem nenhum número
   digitado simplesmente não é enviado.
 -->
 <template>
@@ -23,7 +25,7 @@
 
     <div v-else class="painel-scroll">
       <section v-for="(product, index) in products" :key="product.id" class="painel">
-        <!-- ── Foto: ocupa toda a altura do card ─────────────────────── -->
+        <!-- ── Foto: metade de cima da tela ──────────────────────────── -->
         <div class="foto">
           <img
             v-if="imagem(product)"
@@ -38,57 +40,63 @@
             {{ index + 1 }} / {{ products.length }}
           </q-badge>
 
+          <!-- Só no primeiro: ensina o gesto e some depois de rolar -->
+          <div v-if="index === 0 && products.length > 1" class="dica-scroll">
+            <q-icon name="keyboard_double_arrow_down" size="14px" />
+            arraste para o próximo
+          </div>
+
           <div class="foto-nome">{{ product.name }}</div>
         </div>
 
-        <!-- ── Quantidade ────────────────────────────────────────────── -->
-        <div class="controle column items-center justify-center">
-          <q-btn-toggle
-            v-model="form[product.id].unit_type"
-            spread unelevated no-caps dense
-            class="unidade-toggle"
-            toggle-color="primary" color="grey-3" text-color="grey-8"
-            :options="UNIDADES"
-            @update:model-value="persistir(product.id)"
-          />
+        <!-- ── Quantidade: um quadrado para caixas, outro para unidades ─ -->
+        <div class="quadros">
+          <div v-for="campo in CAMPOS" :key="campo.key" class="quadro column items-center">
+            <div class="quadro-titulo row items-center no-wrap">
+              <q-icon :name="campo.icon" size="16px" class="q-mr-xs" />
+              {{ campo.label }}
+            </div>
 
-          <q-btn
-            round unelevated color="grey-3" text-color="dark" icon="keyboard_arrow_up"
-            size="lg" class="q-mt-md" aria-label="Aumentar"
-            @click="ajustar(product.id, 1)"
-          />
+            <q-input
+              v-model="form[product.id][campo.key]"
+              outlined dense type="number" inputmode="numeric" min="0" step="1"
+              placeholder="—" class="quantidade"
+              input-class="text-center text-weight-bolder"
+              @update:model-value="persistir(product.id)"
+            />
 
-          <q-input
-            v-model="form[product.id].quantity"
-            outlined type="number" inputmode="numeric" min="0" step="1"
-            placeholder="—" class="quantidade q-my-sm"
-            input-class="text-center text-weight-bolder"
-            @update:model-value="persistir(product.id)"
-          />
-
-          <q-btn
-            round unelevated color="grey-3" text-color="dark" icon="keyboard_arrow_down"
-            size="lg" aria-label="Diminuir"
-            @click="ajustar(product.id, -1)"
-          />
-
-          <q-btn
-            flat dense no-caps size="sm" color="grey-7" label="Limpar"
-            class="q-mt-sm"
-            :disable="form[product.id].quantity === ''"
-            @click="limpar(product.id)"
-          />
-
-          <div v-if="product.last_quantity != null" class="text-caption text-grey-6 q-mt-xs">
-            anterior: {{ formatQtd(product.last_quantity) }}
-            {{ product.last_unit_type === 'caixa' ? 'cx' : 'un' }}
+            <div class="row items-center justify-between full-width no-wrap">
+              <q-btn
+                round unelevated color="grey-3" text-color="dark" icon="remove"
+                :aria-label="`Diminuir ${campo.label}`"
+                @click="ajustar(product.id, campo.key, -1)"
+              />
+              <q-btn
+                round unelevated color="grey-3" text-color="dark" icon="add"
+                :aria-label="`Aumentar ${campo.label}`"
+                @click="ajustar(product.id, campo.key, 1)"
+              />
+            </div>
           </div>
         </div>
 
-        <!-- Só no primeiro: ensina o gesto e some depois de rolar -->
-        <div v-if="index === 0 && products.length > 1" class="dica-scroll">
-          <q-icon name="keyboard_double_arrow_down" size="20px" />
-          arraste para o próximo
+        <!-- ── Rodapé do produto: conversão, contagem anterior e limpar ─ -->
+        <div class="rodape row items-center no-wrap">
+          <div class="col text-caption text-grey-7 ellipsis">
+            <span v-if="Number(product.package_size) > 1">
+              caixa com {{ formatQtd(product.package_size) }} un
+            </span>
+            <span v-if="anterior(product)">
+              {{ Number(product.package_size) > 1 ? ' · ' : '' }}anterior:
+              {{ anterior(product) }}
+            </span>
+          </div>
+          <q-btn
+            flat dense no-caps size="sm" color="grey-7" label="Limpar"
+            class="col-auto"
+            :disable="!preenchido(product.id)"
+            @click="limpar(product.id)"
+          />
         </div>
       </section>
     </div>
@@ -126,9 +134,9 @@ const router = useRouter()
 const $q = useQuasar()
 const visita = useVisitaStore()
 
-const UNIDADES = [
-  { label: 'Caixa', value: 'caixa' },
-  { label: 'Unidade', value: 'unidade' },
+const CAMPOS = [
+  { key: 'boxes', label: 'Caixas', icon: 'inventory_2' },
+  { key: 'units', label: 'Unidades', icon: 'widgets' },
 ]
 
 const products = ref([])
@@ -136,8 +144,11 @@ const form = reactive({})
 const loading = ref(false)
 const enviando = ref(false)
 
+const preenchido = (productId) =>
+  form[productId].boxes !== '' || form[productId].units !== ''
+
 const preenchidos = computed(
-  () => Object.values(form).filter((item) => item.quantity !== '').length
+  () => Object.values(form).filter((item) => item.boxes !== '' || item.units !== '').length
 )
 
 const imagem = (product) => mediaUrl(product.image_url)
@@ -145,26 +156,35 @@ const imagem = (product) => mediaUrl(product.image_url)
 const formatQtd = (value) =>
   Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
 
+/** "2 cx + 5 un" da última contagem deste mesmo tipo, ou '' se nunca teve. */
+function anterior(product) {
+  if (product.last_boxes == null && product.last_units == null) return ''
+  const partes = []
+  if (Number(product.last_boxes)) partes.push(`${formatQtd(product.last_boxes)} cx`)
+  if (Number(product.last_units)) partes.push(`${formatQtd(product.last_units)} un`)
+  return partes.length ? partes.join(' + ') : '0'
+}
+
 /** Grava no rascunho local a cada digitação — sair da tela não perde nada. */
 function persistir(productId) {
-  const item = form[productId]
   visita.setItem(props.customerId, props.visitType, productId, {
-    quantity: item.quantity,
-    unit_type: item.unit_type,
+    boxes: form[productId].boxes,
+    units: form[productId].units,
   })
 }
 
-function ajustar(productId, delta) {
-  const atual = form[productId].quantity
-  // Campo em branco + seta para baixo continua em branco: quem não contou ainda
-  // não está declarando zero.
+function ajustar(productId, campo, delta) {
+  const atual = form[productId][campo]
+  // Campo em branco + "menos" continua em branco: quem não contou ainda não
+  // está declarando zero.
   if (atual === '' && delta < 0) return
-  form[productId].quantity = String(Math.max(0, Number(atual || 0) + delta))
+  form[productId][campo] = String(Math.max(0, Number(atual || 0) + delta))
   persistir(productId)
 }
 
 function limpar(productId) {
-  form[productId].quantity = ''
+  form[productId].boxes = ''
+  form[productId].units = ''
   persistir(productId)
 }
 
@@ -208,8 +228,8 @@ onMounted(async () => {
     sheet.products.forEach((product) => {
       const gravado = draft.items[product.id]
       form[product.id] = {
-        quantity: gravado ? String(gravado.quantity) : '',
-        unit_type: gravado?.unit_type || 'unidade',
+        boxes: gravado?.boxes == null ? '' : String(gravado.boxes),
+        units: gravado?.units == null ? '' : String(gravado.units),
       }
     })
 
@@ -243,6 +263,7 @@ onMounted(async () => {
 .painel {
   position: relative;
   display: flex;
+  flex-direction: column;
   height: 100%;
   scroll-snap-align: start;
   scroll-snap-stop: always;
@@ -260,8 +281,8 @@ onMounted(async () => {
    página junto. */
 .foto {
   position: relative;
-  flex: 1 1 55%;
-  min-width: 0;
+  flex: 0 0 48%;
+  min-height: 0;
   border-radius: 14px;
   overflow: hidden;
   isolation: isolate;
@@ -301,20 +322,45 @@ onMounted(async () => {
   background: linear-gradient(to top, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0));
 }
 
+.dica-scroll {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  font-size: 0.7rem;
+  color: rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 /* ── Quantidade ───────────────────────────────────────────────────── */
-.controle {
-  flex: 0 0 42%;
-  max-width: 220px;
+.quadros {
+  display: flex;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Dois alvos grandes e iguais: o promotor não precisa mirar para acertar. */
+.quadro {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: space-between;
   border-radius: 14px;
   background: #fff;
   border: 1px solid rgba(0, 0, 0, 0.08);
   padding: 10px;
 }
 
-.unidade-toggle {
-  width: 100%;
-  border-radius: 10px;
-  overflow: hidden;
+.quadro-titulo {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: rgba(0, 0, 0, 0.55);
 }
 
 .quantidade {
@@ -323,10 +369,10 @@ onMounted(async () => {
 
 .quantidade :deep(input) {
   font-size: 2rem;
-  padding: 4px 0;
+  padding: 2px 0;
 }
 
-/* Some as setinhas nativas do type=number: as do app são maiores e melhores */
+/* Some as setinhas nativas do type=number: os botões do app são maiores */
 .quantidade :deep(input::-webkit-outer-spin-button),
 .quantidade :deep(input::-webkit-inner-spin-button) {
   -webkit-appearance: none;
@@ -337,15 +383,10 @@ onMounted(async () => {
   -moz-appearance: textfield;
 }
 
-.dica-scroll {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: 6px;
-  text-align: center;
-  font-size: 0.7rem;
-  color: rgba(0, 0, 0, 0.45);
-  pointer-events: none;
+.rodape {
+  flex: 0 0 auto;
+  min-height: 26px;
+  padding: 0 4px;
 }
 
 /* ── Barra de envio ───────────────────────────────────────────────── */
@@ -362,9 +403,13 @@ onMounted(async () => {
 }
 
 /* A foto mantém o azul nos dois temas — é ele que dá o contraste com a embalagem. */
-.body--dark .controle,
+.body--dark .quadro,
 .body--dark .barra-envio {
   background: #1e1e2e;
   border-color: rgba(255, 255, 255, 0.12);
+}
+
+.body--dark .quadro-titulo {
+  color: rgba(255, 255, 255, 0.7);
 }
 </style>

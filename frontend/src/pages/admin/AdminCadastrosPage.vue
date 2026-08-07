@@ -180,6 +180,15 @@
           <q-input v-model="produtoForm.name" outlined dense autofocus
                    label="Nome do produto *" />
 
+          <q-input
+            v-model.number="produtoForm.package_size" outlined dense
+            type="number" min="1" step="1" label="Unidades por caixa *"
+            hint="É por aqui que a planilha converte a contagem: 1 caixa + 10 unidades
+                  de um produto com 10 por caixa chega ao relatório como 20 unidades."
+          >
+            <template #prepend><q-icon name="inventory_2" /></template>
+          </q-input>
+
           <div class="row items-center q-col-gutter-md">
             <div class="col-auto">
               <q-avatar rounded size="96px" color="grey-3">
@@ -336,7 +345,7 @@ const buscaProduto = ref('')
 const carregandoProdutos = ref(false)
 const dialogProduto = ref(false)
 
-const produtoForm = reactive({ id: null, name: '', image_url: null })
+const produtoForm = reactive({ id: null, name: '', package_size: 1, image_url: null })
 const fotoArquivo = ref(null)
 const fotoPreview = ref(null)
 // A prévia é um object URL: sem revogar, o navegador segura o arquivo na memória
@@ -345,9 +354,14 @@ let previewUrl = null
 const colunasProduto = [
   { name: 'foto', label: 'Foto', field: 'image_url', align: 'left' },
   { name: 'name', label: 'Produto', field: 'name', align: 'left', sortable: true },
+  { name: 'package_size', label: 'Un. por caixa', field: 'package_size', align: 'right',
+    sortable: true, format: (v) => formatQtd(v) },
   { name: 'is_active', label: 'Situação', field: 'is_active', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
+
+const formatQtd = (v) =>
+  v == null ? '1' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
 
 async function carregarProdutos() {
   carregandoProdutos.value = true
@@ -367,6 +381,7 @@ function abrirProduto(row) {
   Object.assign(produtoForm, {
     id: row?.id || null,
     name: row?.name || '',
+    package_size: Number(row?.package_size) || 1,
     image_url: row?.image_url || null,
   })
   fotoArquivo.value = null
@@ -404,12 +419,23 @@ async function salvarProduto() {
     $q.notify({ type: 'warning', message: 'Informe o nome do produto.' })
     return
   }
+  if (!(Number(produtoForm.package_size) > 0)) {
+    $q.notify({
+      type: 'warning',
+      message: 'Informe quantas unidades vêm numa caixa (no mínimo 1).',
+    })
+    return
+  }
   salvando.value = true
   try {
     // A foto vai numa segunda chamada (multipart): produto novo só ganha id aqui.
+    const payload = {
+      name: produtoForm.name,
+      package_size: Number(produtoForm.package_size),
+    }
     const salvo = produtoForm.id
-      ? await productsApi.update(produtoForm.id, { name: produtoForm.name })
-      : await productsApi.create({ name: produtoForm.name })
+      ? await productsApi.update(produtoForm.id, payload)
+      : await productsApi.create(payload)
 
     if (fotoArquivo.value) {
       await productsApi.uploadImage(salvo.id, fotoArquivo.value)

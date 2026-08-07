@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
 
@@ -9,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.service import CustomersService
 from app.infrastructure.persistence.models.stock_visit import (
-    StockVisit, StockVisitItem, StockVisitStatus, VisitType,
+    StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
 from app.merchandising.repository import MerchandisingRepository as Repo
@@ -72,6 +73,7 @@ class MerchandisingService:
             # Sem mix cadastrado: cai no catálogo completo
             products = [(p, 0) for p in await Repo.list_all_products(session, tenant_id)]
 
+        vazio = (None, None, None)
         return CountSheetResponse(
             customer_id=customer.id,
             customer_name=customer.name,
@@ -82,8 +84,10 @@ class MerchandisingService:
                     name=p.name,
                     image_url=p.image_url,
                     position=position,
-                    last_quantity=last.get(p.id, (None, None))[0],
-                    last_unit_type=last.get(p.id, (None, None))[1],
+                    package_size=p.package_size or Decimal(1),
+                    last_boxes=last.get(p.id, vazio)[0],
+                    last_units=last.get(p.id, vazio)[1],
+                    last_quantity=last.get(p.id, vazio)[2],
                 )
                 for p, position in products
             ],
@@ -137,14 +141,24 @@ class MerchandisingService:
 
         visit = await Repo.save_visit(session, visit)
 
+        # A conversão para unidades é feita aqui, na hora de gravar, e não na
+        # planilha: assim o total já vale para o detalhe da visita e para a
+        # "contagem anterior" da próxima visita, sem repetir a regra em cada
+        # leitura.
+        sizes = await Repo.package_sizes(
+            session, tenant_id, [item.product_id for item in payload.items]
+        )
+
         items = [
             StockVisitItem(
                 id=uuid4(),
                 tenant_id=tenant_id,
                 visit_id=visit.id,
                 product_id=item.product_id,
-                quantity=item.quantity,
-                unit_type=item.unit_type,
+                boxes=item.boxes,
+                units=item.units,
+                quantity=item.boxes * sizes.get(item.product_id, Decimal(1)) + item.units,
+                unit_type=UnitType.UNIDADE.value,
             )
             for item in payload.items
         ]
@@ -183,6 +197,7 @@ class MerchandisingService:
         items = [
             StockVisitItemResponse(
                 id=item.id, product_id=item.product_id, product_name=name,
+                boxes=item.boxes, units=item.units,
                 quantity=item.quantity, unit_type=item.unit_type,
                 expires_at=item.expires_at, notes=item.notes,
             )

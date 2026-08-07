@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import List, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.infrastructure.persistence.models.stock_visit import UnitType, VisitType
 
@@ -28,9 +28,12 @@ class CountProductResponse(BaseModel):
     name: str
     image_url: Optional[str] = None
     position: int = 0
+    # Unidades por caixa: a tela mostra "caixa com N un" ao lado do campo
+    package_size: Decimal = Decimal(1)
     # Contagem anterior NO MESMO TIPO — âncora mental para o promotor
+    last_boxes: Optional[Decimal] = None
+    last_units: Optional[Decimal] = None
     last_quantity: Optional[Decimal] = None
-    last_unit_type: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -49,14 +52,33 @@ class CountSheetResponse(BaseModel):
 
 
 class StockVisitItemInput(BaseModel):
+    """Um produto contado: caixas fechadas e unidades avulsas, separadas.
+
+    `quantity`/`unit_type` são o formato antigo (um número + a unidade). Ainda
+    são aceitos porque a fila offline de um aparelho que não recarregou o app
+    pode subir uma contagem nesse formato dias depois.
+    """
+
     product_id: UUID
-    quantity: Decimal = Field(ge=0)
-    unit_type: str = UnitType.UNIDADE.value
+    boxes: Decimal = Field(default=Decimal(0), ge=0)
+    units: Decimal = Field(default=Decimal(0), ge=0)
+
+    quantity: Optional[Decimal] = Field(default=None, ge=0, exclude=True)
+    unit_type: Optional[str] = Field(default=None, exclude=True)
 
     @field_validator("unit_type")
     @classmethod
-    def _valid_unit_type(cls, value: str) -> str:
-        return UnitType(value).value
+    def _valid_unit_type(cls, value: Optional[str]) -> Optional[str]:
+        return UnitType(value).value if value else value
+
+    @model_validator(mode="after")
+    def _convert_legacy(self) -> "StockVisitItemInput":
+        if self.quantity is not None and not self.boxes and not self.units:
+            if self.unit_type == UnitType.CAIXA.value:
+                self.boxes = self.quantity
+            else:
+                self.units = self.quantity
+        return self
 
 
 class StockVisitCreate(BaseModel):
@@ -79,6 +101,9 @@ class StockVisitItemResponse(BaseModel):
     id: UUID
     product_id: UUID
     product_name: Optional[str] = None
+    boxes: Decimal = Decimal(0)
+    units: Decimal = Decimal(0)
+    # Total em unidades — boxes convertidas pelo package_size do produto + units
     quantity: Decimal
     unit_type: str = UnitType.UNIDADE.value
     expires_at: Optional[date] = None
