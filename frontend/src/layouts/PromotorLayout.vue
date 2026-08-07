@@ -44,26 +44,33 @@
     </q-page-container>
 
     <!-- Durante a contagem as abas somem: a tela é um produto por vez e a barra
-         de envio da própria página ocupa esse espaço. -->
+         de envio da própria página ocupa esse espaço.
+
+         QRouteTab e não QTab: `to` não é prop do QTab, então ali vira um
+         atributo solto no elemento e o clique não navega — sem erro nenhum no
+         console. Quem faz a integração com o router é o QRouteTab.
+
+         `exact` na aba de clientes porque ela aponta para /promotor, que é
+         prefixo de /promotor/envios: sem isso as duas abas acendem juntas. -->
     <q-footer v-if="!contando" elevated class="bg-white text-primary">
-      <q-tabs
-        v-model="tab" dense no-caps active-color="primary"
-        indicator-color="primary" class="text-grey-7"
-      >
-        <q-tab name="clientes" icon="store" label="Clientes" :to="{ name: 'PromotorClientes' }" />
-        <q-tab name="envios" icon="cloud_upload" :to="{ name: 'PromotorEnvios' }">
+      <q-tabs dense no-caps active-color="primary" indicator-color="primary" class="text-grey-7">
+        <q-route-tab
+          name="clientes" icon="store" label="Clientes" exact
+          :to="{ name: 'PromotorClientes' }"
+        />
+        <q-route-tab name="envios" icon="cloud_upload" :to="{ name: 'PromotorEnvios' }">
           <q-badge v-if="visita.pendingCount" color="negative" floating>
             {{ visita.pendingCount }}
           </q-badge>
           <div class="q-tab__label">Envios</div>
-        </q-tab>
+        </q-route-tab>
       </q-tabs>
     </q-footer>
   </q-layout>
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { useAuthStore } from '@/stores/auth'
@@ -77,21 +84,17 @@ const auth = useAuthStore()
 const visita = useVisitaStore()
 const { online } = useOfflineQueue()
 
-const tab = ref('clientes')
-
-// Mantém a aba destacada coerente com a rota (inclusive ao voltar pelo navegador)
-watch(
-  () => route.name,
-  (name) => {
-    tab.value = name === 'PromotorEnvios' ? 'envios' : 'clientes'
-  },
-  { immediate: true }
-)
+// Sem v-model no QTabs: com QRouteTab quem manda no destaque é a rota atual.
 
 const canGoBack = computed(() => route.name !== 'PromotorClientes')
-const contando = computed(() => route.name === 'PromotorContagem')
+const corrigindo = computed(() => route.name === 'PromotorEdicao')
+// Corrigir usa a mesma tela cheia da contagem, com a mesma barra no rodapé
+const contando = computed(() => corrigindo.value || route.name === 'PromotorContagem')
 
 const title = computed(() => {
+  if (corrigindo.value) {
+    return route.query.c ? `Corrigir · ${route.query.c}` : 'Corrigir envio'
+  }
   if (contando.value) {
     const lugar = route.params.visitType === 'gondola' ? 'Gôndola' : 'Estoque'
     // O nome do cliente vem na query só para o cabeçalho — abrir a URL direto

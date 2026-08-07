@@ -8,6 +8,12 @@
   unidades: tem "1 caixa e 5 unidades" do mesmo produto. Arrastar para baixo
   passa para o próximo produto (scroll-snap), e produto sem nenhum número
   digitado simplesmente não é enviado.
+
+  A mesma tela serve para CORRIGIR um envio (rota com `visitId`): o promotor que
+  digitou um número errado precisa reencontrar o produto exatamente onde o viu
+  da primeira vez. Muda só o que entra e o que sai — os produtos são os que ele
+  contou naquele envio, já preenchidos, e o botão grava direto no servidor em
+  vez de fechar uma contagem nova.
 -->
 <template>
   <q-page class="contagem-page">
@@ -20,7 +26,10 @@
       class="bg-grey-2 text-grey-8 rounded-borders q-ma-md"
     >
       <template #avatar><q-icon name="inventory_2" color="grey-6" /></template>
-      Nenhum produto cadastrado para este cliente. Fale com o administrador.
+      <template v-if="editando">Este envio não tem nenhum produto para corrigir.</template>
+      <template v-else>
+        Nenhum produto cadastrado para este cliente. Fale com o administrador.
+      </template>
     </q-banner>
 
     <div v-else class="painel-scroll">
@@ -108,10 +117,12 @@
         produtos preenchidos
       </div>
       <q-btn
-        color="positive" size="lg" unelevated no-caps icon="cloud_upload"
-        label="Enviar" class="col-auto"
+        size="lg" unelevated no-caps class="col-auto"
+        :color="editando ? 'primary' : 'positive'"
+        :icon="editando ? 'save' : 'cloud_upload'"
+        :label="editando ? 'Salvar' : 'Enviar'"
         :disable="preenchidos === 0" :loading="enviando"
-        @click="confirmarEnvio"
+        @click="editando ? salvarCorrecao() : confirmarEnvio()"
       />
     </div>
   </q-page>
@@ -126,9 +137,14 @@ import { merchandisingApi } from '@/api/merchandising'
 import { useVisitaStore } from '@/stores/visita'
 
 const props = defineProps({
-  customerId: { type: String, required: true },
-  visitType: { type: String, required: true },
+  // Contagem nova: cliente e lugar vêm da URL
+  customerId: { type: String, default: '' },
+  visitType: { type: String, default: '' },
+  // Correção de um envio já feito: a URL traz só o id da contagem
+  visitId: { type: String, default: '' },
 })
+
+const editando = computed(() => Boolean(props.visitId))
 
 const router = useRouter()
 const $q = useQuasar()
@@ -165,8 +181,11 @@ function anterior(product) {
   return partes.length ? partes.join(' + ') : '0'
 }
 
-/** Grava no rascunho local a cada digitação — sair da tela não perde nada. */
+/** Grava no rascunho local a cada digitação — sair da tela não perde nada.
+ *  Na correção não há rascunho: o que vale é o que está no servidor, e sair da
+ *  tela sem salvar tem que deixar o envio como estava. */
 function persistir(productId) {
+  if (editando.value) return
   visita.setItem(props.customerId, props.visitType, productId, {
     boxes: form[productId].boxes,
     units: form[productId].units,
@@ -216,20 +235,63 @@ async function enviar() {
   router.push({ name: 'PromotorClientes' })
 }
 
+/**
+ * Correção: substitui as quantidades do envio no servidor.
+ *
+ * Sem fila offline aqui de propósito — a tela só abriu porque o servidor
+ * respondeu, então falhar no salvar quer dizer que a conexão caiu no meio. É
+ * mais honesto avisar e deixar o promotor tentar de novo do que guardar a
+ * correção num aparelho onde ela pode ficar semanas sem subir.
+ */
+async function salvarCorrecao() {
+  enviando.value = true
+  try {
+    await merchandisingApi.updateVisit(props.visitId, {
+      // Produto que ficou com os dois campos em branco sai da contagem
+      items: products.value
+        .filter((product) => preenchido(product.id))
+        .map((product) => ({
+          product_id: product.id,
+          boxes: form[product.id].boxes || 0,
+          units: form[product.id].units || 0,
+        })),
+    })
+    $q.notify({ type: 'positive', message: 'Contagem corrigida.', position: 'top' })
+    router.push({ name: 'PromotorEnvios' })
+  } catch (error) {
+    $q.notify({
+      type: 'negative',
+      message: error.response?.data?.detail
+        || 'Não foi possível salvar. Verifique a conexão e tente de novo.',
+      position: 'top',
+      timeout: 5000,
+    })
+  } finally {
+    enviando.value = false
+  }
+}
+
 onMounted(async () => {
   loading.value = true
   try {
-    const sheet = await merchandisingApi.countSheet(props.customerId, props.visitType)
+    const sheet = editando.value
+      ? await merchandisingApi.visitSheet(props.visitId)
+      : await merchandisingApi.countSheet(props.customerId, props.visitType)
 
     // O formulário é preenchido ANTES da lista: o template lê `form[id]` em todo
     // painel, e uma renderização com a lista pronta e o formulário vazio quebra.
     // Recupera também o que já tinha sido digitado nesta contagem (mesmo aparelho).
-    const draft = visita.getDraft(props.customerId, props.visitType)
+    const draft = editando.value
+      ? { items: {} }
+      : visita.getDraft(props.customerId, props.visitType)
+
     sheet.products.forEach((product) => {
-      const gravado = draft.items[product.id]
+      // Na correção o ponto de partida é o que está gravado no envio; na
+      // contagem nova, o que ficou digitado neste aparelho.
+      const gravado = editando.value ? product : draft.items[product.id]
       form[product.id] = {
-        boxes: gravado?.boxes == null ? '' : String(gravado.boxes),
-        units: gravado?.units == null ? '' : String(gravado.units),
+        boxes: numeroDoCampo(gravado?.boxes),
+        units: numeroDoCampo(gravado?.units),
       }
     })
 
@@ -243,6 +305,12 @@ onMounted(async () => {
     loading.value = false
   }
 })
+
+/** Valor gravado → texto do campo. Passa por Number porque o servidor manda
+ *  decimal ("2.000") e o campo tem que mostrar 2. Nulo é campo em branco. */
+function numeroDoCampo(value) {
+  return value == null ? '' : String(Number(value))
+}
 </script>
 
 <style scoped>

@@ -16,7 +16,8 @@ from app.infrastructure.persistence.models.user import User, UserRole
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     CountProductResponse, CountSheetResponse, PromoterCustomerResponse,
-    StockVisitCreate, StockVisitItemResponse, StockVisitResponse,
+    StockVisitCreate, StockVisitItemInput, StockVisitItemResponse, StockVisitResponse,
+    StockVisitUpdate,
 )
 
 
@@ -93,6 +94,50 @@ class MerchandisingService:
             ],
         )
 
+    @staticmethod
+    async def visit_sheet(
+        session: AsyncSession, tenant_id: UUID, user: User, visit_id: UUID
+    ) -> CountSheetResponse:
+        """Folha de correção de um envio: os mesmos painéis da contagem, mas só
+        com os produtos que o promotor de fato contou, já preenchidos com o que
+        ele digitou. Quem errou um número volta para corrigir aquele número, não
+        para refazer a contagem inteira.
+        """
+        visit, customer_name = await MerchandisingService._load_editable_visit(
+            session, tenant_id, user, visit_id
+        )
+
+        # Mesma ordem da tela de contagem: o promotor reencontra os produtos na
+        # sequência em que os contou.
+        mix = await Repo.list_mix_product_ids(session, tenant_id, visit.customer_id)
+        position_of = {product_id: index for index, product_id in enumerate(mix)}
+
+        rows = sorted(
+            # Produto apagado do catálogo não tem painel para desenhar
+            ((item, p) for item, p in await Repo.list_items(session, visit.id) if p),
+            key=lambda row: (position_of.get(row[1].id, len(mix)), row[1].name),
+        )
+
+        return CountSheetResponse(
+            customer_id=visit.customer_id,
+            customer_name=customer_name or "",
+            visit_type=visit.visit_type,
+            visit_id=visit.id,
+            status=visit.status,
+            products=[
+                CountProductResponse(
+                    id=product.id,
+                    name=product.name,
+                    image_url=product.image_url,
+                    position=position_of.get(product.id, 0),
+                    package_size=product.package_size or Decimal(1),
+                    boxes=item.boxes,
+                    units=item.units,
+                )
+                for item, product in rows
+            ],
+        )
+
     # ── Promotor: gravar contagem ─────────────────────────────────────────
 
     @staticmethod
@@ -141,30 +186,71 @@ class MerchandisingService:
 
         visit = await Repo.save_visit(session, visit)
 
-        # A conversão para unidades é feita aqui, na hora de gravar, e não na
-        # planilha: assim o total já vale para o detalhe da visita e para a
-        # "contagem anterior" da próxima visita, sem repetir a regra em cada
-        # leitura.
-        sizes = await Repo.package_sizes(
-            session, tenant_id, [item.product_id for item in payload.items]
+        await Repo.replace_items(
+            session, visit.id,
+            await MerchandisingService._build_items(
+                session, tenant_id, visit.id, payload.items
+            ),
         )
 
-        items = [
+        return await MerchandisingService.get_visit(session, tenant_id, visit.id)
+
+    @staticmethod
+    async def update_visit(
+        session: AsyncSession, tenant_id: UUID, user: User, visit_id: UUID,
+        payload: StockVisitUpdate,
+    ) -> StockVisitResponse:
+        """Correção de uma contagem já enviada: troca as quantidades dos itens.
+
+        Não mexe no status — a contagem continua enviada, só com outros números.
+        """
+        visit, _ = await MerchandisingService._load_editable_visit(
+            session, tenant_id, user, visit_id
+        )
+
+        await Repo.replace_items(
+            session, visit.id,
+            await MerchandisingService._build_items(
+                session, tenant_id, visit.id, payload.items
+            ),
+        )
+
+        # `updated_at` só muda sozinho quando a própria linha da visita muda, e
+        # aqui quem mudou foram os itens. Marcar na mão é o que registra que
+        # esta contagem foi corrigida depois de enviada.
+        visit.updated_at = datetime.now(timezone.utc)
+        await Repo.save_visit(session, visit)
+
+        return await MerchandisingService.get_visit(session, tenant_id, visit.id)
+
+    @staticmethod
+    async def _build_items(
+        session: AsyncSession, tenant_id: UUID, visit_id: UUID,
+        inputs: list[StockVisitItemInput],
+    ) -> list[StockVisitItem]:
+        """Converte o que o promotor digitou (caixas + unidades) em linhas.
+
+        A conversão para unidades é feita aqui, na hora de gravar, e não na
+        planilha: assim o total já vale para o detalhe da visita e para a
+        "contagem anterior" da próxima visita, sem repetir a regra em cada
+        leitura.
+        """
+        sizes = await Repo.package_sizes(
+            session, tenant_id, [item.product_id for item in inputs]
+        )
+        return [
             StockVisitItem(
                 id=uuid4(),
                 tenant_id=tenant_id,
-                visit_id=visit.id,
+                visit_id=visit_id,
                 product_id=item.product_id,
                 boxes=item.boxes,
                 units=item.units,
                 quantity=item.boxes * sizes.get(item.product_id, Decimal(1)) + item.units,
                 unit_type=UnitType.UNIDADE.value,
             )
-            for item in payload.items
+            for item in inputs
         ]
-        await Repo.replace_items(session, visit.id, items)
-
-        return await MerchandisingService.get_visit(session, tenant_id, visit.id)
 
     @staticmethod
     async def submit_visit(
@@ -196,12 +282,13 @@ class MerchandisingService:
         item_rows = await Repo.list_items(session, visit.id)
         items = [
             StockVisitItemResponse(
-                id=item.id, product_id=item.product_id, product_name=name,
+                id=item.id, product_id=item.product_id,
+                product_name=product.name if product else None,
                 boxes=item.boxes, units=item.units,
                 quantity=item.quantity, unit_type=item.unit_type,
                 expires_at=item.expires_at, notes=item.notes,
             )
-            for item, name in item_rows
+            for item, product in item_rows
         ]
 
         return StockVisitResponse(
@@ -236,6 +323,32 @@ class MerchandisingService:
         return visits, total
 
     # ── Guarda de acesso ──────────────────────────────────────────────────
+
+    @staticmethod
+    async def _load_editable_visit(
+        session: AsyncSession, tenant_id: UUID, user: User, visit_id: UUID
+    ) -> tuple[StockVisit, Optional[str]]:
+        """Visita que este usuário ainda pode alterar — ou o erro que diz por quê.
+
+        Depois de exportada a contagem já virou planilha na mão do administrador:
+        mudar o número aqui faria o app discordar do que ele baixou.
+        """
+        row = await Repo.get_visit_detail(session, tenant_id, visit_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Contagem não encontrada")
+
+        visit, customer_name, _ = row
+        if visit.promoter_id != user.id and not _is_admin(user):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Esta contagem pertence a outro promotor.",
+            )
+        if visit.status == StockVisitStatus.EXPORTED.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Esta contagem já foi processada pelo administrador e não pode mais ser alterada.",
+            )
+        return visit, customer_name
 
     @staticmethod
     async def _assert_can_access_customer(

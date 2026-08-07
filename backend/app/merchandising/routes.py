@@ -12,7 +12,7 @@ from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, PromoterCustomerResponse,
-    StockVisitCreate, StockVisitListResponse, StockVisitResponse,
+    StockVisitCreate, StockVisitListResponse, StockVisitResponse, StockVisitUpdate,
 )
 from app.merchandising.service import MerchandisingService
 
@@ -70,6 +70,31 @@ async def upsert_visit(
     """Cria ou atualiza uma contagem. Idempotente via `client_uuid`."""
     return await MerchandisingService.upsert_visit(
         session, context["tenant_id"], context["user"], payload
+    )
+
+
+@router.get("/visits/{visit_id}/count-sheet", response_model=CountSheetResponse)
+async def get_visit_sheet(
+    visit_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_FIELD)),
+):
+    """Folha de correção: só os produtos contados naquele envio, preenchidos."""
+    return await MerchandisingService.visit_sheet(
+        session, context["tenant_id"], context["user"], visit_id
+    )
+
+
+@router.put("/visits/{visit_id}", response_model=StockVisitResponse)
+async def update_visit(
+    visit_id: UUID,
+    payload: StockVisitUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_FIELD)),
+):
+    """Corrige as quantidades de uma contagem já enviada."""
+    return await MerchandisingService.update_visit(
+        session, context["tenant_id"], context["user"], visit_id, payload
     )
 
 

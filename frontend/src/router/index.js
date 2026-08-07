@@ -27,6 +27,14 @@ export const promotorRoutes = [
         name: 'PromotorEnvios',
         component: () => import('@/pages/promotor/PromotorEnviosPage.vue'),
       },
+      {
+        // Correção de um envio: é a mesma tela da contagem, só que carregada a
+        // partir do que está no servidor em vez do mix do cliente.
+        path: 'envios/:visitId',
+        name: 'PromotorEdicao',
+        component: () => import('@/pages/promotor/PromotorContagemPage.vue'),
+        props: true,
+      },
     ],
   },
 ]

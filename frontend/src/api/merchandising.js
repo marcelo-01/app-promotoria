@@ -25,10 +25,24 @@ export const merchandisingApi = {
     return data
   },
 
+  /** Folha de correção de um envio: só os produtos contados, já preenchidos. */
+  async visitSheet(visitId) {
+    const { data } = await apiClient.get(`/merchandising/visits/${visitId}/count-sheet`)
+    return data
+  },
+
   async saveVisit(payload) {
     // Timeout maior: o promotor pode ter 40 itens e sinal ruim de supermercado.
     // O default do apiClient (10s) é curto demais para este envio.
     const { data } = await apiClient.post('/merchandising/visits', payload, {
+      timeout: 30000,
+    })
+    return data
+  },
+
+  /** Corrige as quantidades de um envio. Mesmo timeout largo do envio. */
+  async updateVisit(visitId, payload) {
+    const { data } = await apiClient.put(`/merchandising/visits/${visitId}`, payload, {
       timeout: 30000,
     })
     return data

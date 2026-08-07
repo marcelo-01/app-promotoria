@@ -35,16 +35,27 @@ class CountProductResponse(BaseModel):
     last_units: Optional[Decimal] = None
     last_quantity: Optional[Decimal] = None
 
+    # O que já está gravado neste produto. Só vem preenchido na folha de
+    # correção de um envio; na contagem nova não há nada digitado ainda.
+    boxes: Optional[Decimal] = None
+    units: Optional[Decimal] = None
+
     model_config = {"from_attributes": True}
 
 
 class CountSheetResponse(BaseModel):
     """Tudo que a tela de contagem precisa, numa requisição só — é a única
-    chamada que o promotor faz ao entrar na loja, muitas vezes com sinal ruim."""
+    chamada que o promotor faz ao entrar na loja, muitas vezes com sinal ruim.
+
+    A folha de correção de um envio usa esta mesma resposta (com `visit_id`
+    preenchido), porque a tela é a mesma: só muda de onde vêm os produtos.
+    """
 
     customer_id: UUID
     customer_name: str
     visit_type: str
+    visit_id: Optional[UUID] = None
+    status: Optional[str] = None
     products: List[CountProductResponse] = []
 
 
@@ -95,6 +106,17 @@ class StockVisitCreate(BaseModel):
     @classmethod
     def _valid_visit_type(cls, value: str) -> str:
         return VisitType(value).value
+
+
+class StockVisitUpdate(BaseModel):
+    """Correção de uma contagem já enviada.
+
+    Só as quantidades: o cliente e o tipo continuam os mesmos, e produto que não
+    vier na lista sai da contagem (foi apagado na tela). Produto que nunca foi
+    contado não entra por aqui — para isso o promotor faz uma contagem nova.
+    """
+
+    items: List[StockVisitItemInput] = []
 
 
 class StockVisitItemResponse(BaseModel):

@@ -246,9 +246,14 @@ class MerchandisingRepository:
     @staticmethod
     async def list_items(
         session: AsyncSession, visit_id: UUID
-    ) -> Sequence[tuple[StockVisitItem, str]]:
+    ) -> Sequence[tuple[StockVisitItem, Optional[Product]]]:
+        """Itens da contagem, cada um com o seu produto.
+
+        Devolve o produto inteiro e não só o nome porque a tela de correção
+        remonta os mesmos painéis da contagem — precisa de foto e package_size.
+        """
         query = (
-            select(StockVisitItem, Product.name)
+            select(StockVisitItem, Product)
             .join(Product, Product.id == StockVisitItem.product_id, isouter=True)
             .where(StockVisitItem.visit_id == visit_id)
             .order_by(Product.name)
