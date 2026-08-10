@@ -176,6 +176,13 @@ os volumes moram no mesmo disco e somem junto com ele. Um `cron` diário resolve
 
 Para voltar um dump: `make prod-restore f=backups/banco_AAAAMMDD_HHMMSS.sql.gz`.
 
+### Hospedar num PC Windows
+
+Se o servidor for uma máquina Windows em vez de uma VPS Linux, o app não muda —
+o que muda é o hospedeiro. O passo a passo (WSL2, Docker sem o Docker Desktop,
+rede, e como fazer tudo voltar sozinho depois de um reinício) está em
+[`DEPLOY_WINDOWS.md`](DEPLOY_WINDOWS.md).
+
 ### Comandos de produção
 
 ```bash
