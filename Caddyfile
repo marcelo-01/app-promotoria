@@ -1,0 +1,23 @@
+# TLS do app em produção. O Caddy fica na frente do nginx só para terminar
+# HTTPS e redirecionar o :80 — o roteamento (SPA, /api/, cache) continua todo
+# no `frontend/nginx.prod.conf`.
+#
+# HTTPS é requisito funcional, não hardening: service worker e instalação de
+# PWA só existem em contexto seguro, e é o service worker que segura a contagem
+# dentro do supermercado sem sinal.
+
+{$APP_DOMAIN} {
+	# Vazio: certificado público, emitido e renovado sozinho via Let's Encrypt.
+	# `tls internal`: CA do próprio Caddy, para rede interna sem domínio público.
+	{$CADDY_TLS}
+
+	# O nginx já comprime o que serve; aqui é só o que passar direto.
+	encode gzip
+
+	reverse_proxy web:80 {
+		# Quem o nginx vai ler como IP real do cliente para limitar a taxa no
+		# /auth/login. Sem isto, todo mundo chega como o IP do Caddy e um
+		# celular sozinho consegue bloquear o login da equipe inteira.
+		header_up X-Forwarded-For {remote_host}
+	}
+}

@@ -92,7 +92,105 @@ O `vite.config.js` já expõe o dev server em `0.0.0.0:5174` e o CORS da API ace
 IPs de rede local. Acesse `http://<ip-da-maquina>:5174` pelo Wi-Fi.
 
 Para instalar como PWA de verdade (e testar o modo offline com service worker) é
-preciso **HTTPS** — em produção, use Let's Encrypt via nginx ou Caddy.
+preciso **HTTPS** — em produção isso já vem pronto, ver a seção abaixo.
+
+## Deploy em produção
+
+A stack de produção é outra: `docker-compose.prod.yml`. Ela não monta o código do
+host, não roda `--reload`, serve o frontend compilado por nginx e põe um **Caddy**
+na frente para o TLS. Só o Caddy publica porta (80 e 443); API, banco e nginx
+ficam na rede interna do compose.
+
+```
+internet → caddy (TLS) → nginx (SPA + /api/) → api → db
+```
+
+### Configurar
+
+```bash
+cp .env.example .env
+```
+
+Depois edite o `.env`. Estes cinco são o deploy inteiro:
+
+| Variável | O que pôr | Se errar |
+|---|---|---|
+| `API_ENV` | `production` | Deixa `/docs` aberto e o CORS frouxo |
+| `SECRET_KEY` | `openssl rand -hex 32` | **A API se recusa a subir** |
+| `POSTGRES_PASSWORD` (e a mesma em `DATABASE_PASSWORD` e dentro de `DATABASE_URL`) | `openssl rand -hex 16` | **A API se recusa a subir** |
+| `VITE_API_URL` | `/api` | O app quebra em todo celular, sem erro no servidor |
+| `APP_DOMAIN` | o domínio do app | O Caddy não sobe |
+| `FRONTEND_URL` | `https://<seu domínio>` | O download da planilha falha por CORS |
+
+As duas primeiras são checadas na largada: subir com as credenciais do
+`.env.example` derruba a API com o motivo na primeira linha do log. Isso é de
+propósito — a `SECRET_KEY` de exemplo está publicada neste repositório, e com ela
+qualquer um forja um token de administrador.
+
+**Sem domínio público** (rede interna da empresa): ponha em `APP_DOMAIN` o nome
+interno da máquina e `CADDY_TLS=tls internal` no `.env`. O Caddy passa a emitir o
+certificado com uma CA própria — que precisa ser instalada em cada celular, senão
+o navegador barra o acesso. O arquivo da CA sai em
+`docker compose -f docker-compose.prod.yml exec caddy cat /data/caddy/pki/authorities/local/root.crt`.
+
+### Subir
+
+```bash
+make prod-up      # build + up -d
+make prod-seed    # SÓ NA PRIMEIRA VEZ: cria o tenant e o usuário admin
+make prod-logs
+```
+
+As migrações rodam sozinhas toda vez que a API sobe — não há passo manual de
+`alembic` no deploy.
+
+### Logo depois da primeira subida
+
+1. Entre como `admin` / `admin`.
+2. **Troque a senha na hora**, no menu do canto superior direito → *Trocar minha
+   senha*. Enquanto não trocar, o app está com a senha que está escrita neste
+   README.
+
+### Atualizar depois
+
+```bash
+git pull && make prod-up
+```
+
+O `--build` refaz as imagens e as migrações pendentes sobem junto. Fotos
+(`estoque_uploads`), banco (`estoque_pg_data`) e certificados (`caddy_data`) estão
+em volumes e sobrevivem ao redeploy.
+
+### Backup
+
+```bash
+make prod-backup   # banco + fotos em ./backups
+```
+
+Roda o `pg_dump` e empacota as fotos. **Copie os arquivos para fora do servidor** —
+os volumes moram no mesmo disco e somem junto com ele. Um `cron` diário resolve:
+
+```cron
+0 2 * * * cd /caminho/do/app-promotoria && make prod-backup
+```
+
+Para voltar um dump: `make prod-restore f=backups/banco_AAAAMMDD_HHMMSS.sql.gz`.
+
+### Comandos de produção
+
+```bash
+make prod-up       # sobe (com build)
+make prod-down     # derruba
+make prod-logs     # acompanha os logs
+make prod-ps       # estado dos contêineres
+make prod-migrate  # aplica migrações sem reiniciar
+make prod-seed     # cria tenant + admin (só na primeira vez)
+make prod-shell    # bash dentro do container da API
+make prod-backup   # banco + fotos em ./backups
+```
+
+Os alvos sem o prefixo `prod-` falam com o compose de **desenvolvimento** e não
+fazem nada de útil no servidor.
 
 ## Estrutura
 

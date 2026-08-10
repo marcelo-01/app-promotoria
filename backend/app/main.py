@@ -17,10 +17,20 @@ from app.infrastructure.persistence import models  # noqa: F401
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# `/docs` fechado em produção: a documentação interativa é aberta e desenha o
+# mapa inteiro da API (rotas, schemas, papéis) para quem só achou o endereço.
+# Em desenvolvimento ela continua ligada, que é onde serve para alguma coisa.
+_DOCS = (
+    {"docs_url": None, "redoc_url": None, "openapi_url": None}
+    if settings.is_production
+    else {}
+)
+
 app = FastAPI(
     title="Coleta de Estoque API",
     description="App de coleta de estoque em ponto de venda — promotores",
     version="0.1.0",
+    **_DOCS,
 )
 
 # Aceita localhost, 127.x.x.x e IPs de rede local (essencial para testar no celular)

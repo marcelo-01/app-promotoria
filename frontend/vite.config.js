@@ -35,8 +35,14 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         runtimeCaching: [
           {
-            // Clientes e produtos podem vir do cache quando não há sinal
-            urlPattern: ({ url }) => url.pathname.startsWith('/merchandising/'),
+            // Clientes e produtos podem vir do cache quando não há sinal.
+            //
+            // `includes` e não `startsWith`: em produção o nginx serve a API sob
+            // `/api/`, então o caminho real é `/api/merchandising/...`. Com
+            // `startsWith` esta regra nunca casava fora do ambiente de
+            // desenvolvimento e a tela de clientes ficava sem cache justamente
+            // onde ela precisa dele.
+            urlPattern: ({ url }) => url.pathname.includes('/merchandising/'),
             handler: 'NetworkFirst',
             options: {
               cacheName: 'merch-cache',

@@ -1,0 +1,9 @@
+# Crítico, não cosmético: o Dockerfile faz `npm install` e só depois `COPY . .`.
+# Sem esta linha, um `node_modules` do host sobrescreve o que o contêiner acabou
+# de instalar — e os binários nativos (esbuild, rollup) quebram o build.
+node_modules/
+
+dist/
+dev-dist/
+.env
+.env.*

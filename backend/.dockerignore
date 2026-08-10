@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# As fotos de produto do ambiente de desenvolvimento. Em produção elas vivem no
+# volume `estoque_uploads`, montado por cima deste diretório — copiá-las para
+# dentro da imagem só engorda o build com dados que ninguém vai ler.
+uploads/

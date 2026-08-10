@@ -5,6 +5,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     postgresql-client \
     curl \
+    # zoneinfo precisa da base do sistema para resolver America/Sao_Paulo —
+    # sem ela a planilha volta a sair em UTC
+    tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

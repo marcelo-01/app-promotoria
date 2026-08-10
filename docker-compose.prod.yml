@@ -1,10 +1,21 @@
-# Produção: sem bind mount de código, sem --reload, frontend servido por nginx.
-# Uso: docker compose -f docker-compose.prod.yml up -d --build
+# Produção: sem bind mount de código, sem --reload, frontend servido por nginx
+# e TLS terminado pelo Caddy.
+# Uso: make prod-up   (ou: docker compose -f docker-compose.prod.yml up -d --build)
+
+# Log do Docker cresce sem limite por padrão e enche o disco do servidor com o
+# app parado do lado, sem aviso.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
     container_name: estoque_postgres
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -25,6 +36,7 @@ services:
       dockerfile: Dockerfile
     container_name: estoque_api
     restart: unless-stopped
+    logging: *logging
     environment:
       DATABASE_URL: ${DATABASE_URL}
       DATABASE_HOST: ${DATABASE_HOST}
@@ -39,10 +51,24 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS}
       FRONTEND_URL: ${FRONTEND_URL}
+      TIMEZONE: ${TIMEZONE:-America/Sao_Paulo}
     volumes:
       # Fotos dos produtos. Sem este volume, um redeploy com --build apagaria
       # todas as fotos junto com a imagem antiga do contêiner.
       - estoque_uploads:/app/uploads
+    # As migrações rodam aqui, na subida, e não num passo manual do deploy:
+    # esquecer o `alembic upgrade` deixava a API respondendo /health com 200 e
+    # estourando 500 no login, que é o pior jeito de descobrir o problema.
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      # Dá folga para as migrações antes de o contêiner ser considerado doente
+      start_period: 60s
     depends_on:
       db:
         condition: service_healthy
@@ -54,14 +80,43 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.prod
       args:
-        # URL pública da API — o build do Vite congela este valor no bundle
-        VITE_API_URL: ${VITE_API_URL}
+        # URL pública da API — o build do Vite congela este valor no bundle.
+        # Sem valor, o bundle sai apontando para localhost e o app não funciona
+        # em nenhum celular; por isso a variável é obrigatória e não tem default.
+        VITE_API_URL: ${VITE_API_URL:?defina VITE_API_URL=/api no .env}
     container_name: estoque_web
     restart: unless-stopped
-    ports:
-      - "80:80"
+    logging: *logging
+    # Sem `ports`: quem fala com a internet é o Caddy, e o nginx só é alcançável
+    # de dentro da rede do compose. É isso que impede o app de ser servido em
+    # HTTP puro por engano, matando o service worker.
+    expose:
+      - "80"
     depends_on:
       - api
+    networks:
+      - estoque_network
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: estoque_caddy
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?defina APP_DOMAIN no .env}
+      CADDY_TLS: ${CADDY_TLS:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Os certificados vivem aqui. Sem este volume, cada redeploy pede um
+      # certificado novo e o Let's Encrypt bloqueia por excesso de emissões.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
     networks:
       - estoque_network
 
@@ -69,6 +124,10 @@ volumes:
   estoque_pg_data:
     driver: local
   estoque_uploads:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
     driver: local
 
 networks:

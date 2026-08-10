@@ -29,6 +29,11 @@
                 <q-item-section>Sincronizar agora</q-item-section>
               </q-item>
               <q-separator />
+              <q-item clickable v-close-popup @click="dialogSenha = true">
+                <q-item-section avatar><q-icon name="lock_reset" /></q-item-section>
+                <q-item-section>Trocar minha senha</q-item-section>
+              </q-item>
+              <q-separator />
               <q-item clickable v-close-popup @click="logout">
                 <q-item-section avatar><q-icon name="logout" /></q-item-section>
                 <q-item-section>Sair</q-item-section>
@@ -66,16 +71,19 @@
         </q-route-tab>
       </q-tabs>
     </q-footer>
+
+    <TrocarSenhaDialog v-model="dialogSenha" />
   </q-layout>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { useAuthStore } from '@/stores/auth'
 import { useVisitaStore } from '@/stores/visita'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
+import TrocarSenhaDialog from '@/components/TrocarSenhaDialog.vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -83,6 +91,8 @@ const $q = useQuasar()
 const auth = useAuthStore()
 const visita = useVisitaStore()
 const { online } = useOfflineQueue()
+
+const dialogSenha = ref(false)
 
 // Sem v-model no QTabs: com QRouteTab quem manda no destaque é a rota atual.
 

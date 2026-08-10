@@ -14,3 +14,6 @@ htmlcov/
 
 # Fotos de produto enviadas pelo administrador
 backend/uploads/
+
+# Dumps gerados por `make prod-backup` — nunca versionar, é o banco inteiro
+backups/
