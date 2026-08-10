@@ -9,10 +9,20 @@ executa tudo é o WSL2. Para o deploy genérico (numa VPS ou máquina Linux), ve
 a seção "Deploy em produção" do [README](README.md) — daqui para baixo é só o
 que o Windows exige a mais.
 
-## Antes de tudo: o que depende do TI
+## O que precisa estar resolvido antes
 
-Nenhum passo abaixo funciona sem estas quatro coisas, e elas costumam demorar
-mais que a instalação inteira:
+**Direitos de administrador nesta máquina.** Único item sem alternativa:
+instalar o WSL2, o Docker, criar regra de firewall e tarefa agendada exigem
+admin. Se a máquina for gerenciada pelo TI, comece por aqui.
+
+Fora isso, **os passos 1 a 8 não dependem de mais ninguém**. Instale tudo, abra
+o app em `https://localhost` na própria máquina e confirme que funciona. Só o
+passo 9 — o promotor alcançar o app de fora — precisa da rede resolvida, e para
+isso há dois caminhos.
+
+### Caminho A: expor a máquina (precisa do TI)
+
+Peça de uma vez, porque costuma demorar mais que a instalação:
 
 - **Reserva de IP na rede local** para este PC, no DHCP — se o IP interno mudar,
   o redirecionamento quebra.
@@ -24,7 +34,24 @@ mais que a instalação inteira:
   portas. A 80 precisa continuar aberta depois: é por ela que o certificado
   HTTPS se renova sozinho a cada 3 meses.
 
-Você também precisa de **direitos de administrador** na máquina.
+Para quem administra o roteador, são dez minutos. É o caminho preferível: usa a
+infraestrutura que a empresa já tem e não põe terceiro nenhum no meio.
+
+### Caminho B: túnel (não precisa do TI)
+
+Se o pedido acima for negado ou demorar, um contêiner `cloudflared` abre uma
+conexão de dentro para fora e a Cloudflare publica o app em HTTPS. Não há porta
+para abrir, firewall para liberar nem IP para reservar. Em troca, é preciso um
+domínio próprio com DNS na Cloudflare (plano gratuito), e o tráfego passa por
+ela. Este caminho substitui o Caddy no `docker-compose.prod.yml`.
+
+### O que não tem alternativa
+
+**HTTPS.** Acessar por `http://<ip>` parece atalho, mas o navegador não registra
+o service worker fora de contexto seguro — e sem service worker não existe modo
+offline. O promotor sem sinal no corredor do supermercado perde a tela de
+contagem, que é a razão de o app existir. O Let's Encrypt também não emite
+certificado para endereço IP, só para nome.
 
 ## 1. Fazer o Windows parar de se comportar como desktop
 
