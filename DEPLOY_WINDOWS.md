@@ -1,5 +1,13 @@
 # Hospedar num PC Windows
 
+> **Caminho não adotado.** O app foi para o servidor Linux da empresa
+> (`forcavendas`, o mesmo do ERP `fv-laticinios`), em `/opt/app-promotoria`.
+> Ver a seção "Deploy em produção" do [README](README.md).
+>
+> Este runbook fica como plano B, mas está desatualizado num ponto que importa:
+> ele pressupõe HTTPS via Caddy, e o deploy real serve em HTTP puro na porta
+> 8080 — o serviço `caddy` não existe mais no `docker-compose.prod.yml`.
+
 Runbook para colocar o app no ar a partir de uma máquina Windows do escritório,
 alcançável pelos promotores em campo, com HTTPS e voltando sozinha depois de
 qualquer reinício.
