@@ -1,12 +1,12 @@
 # Produção: sem bind mount de código, sem --reload, frontend servido por nginx
-# direto na porta 8080, em HTTP puro.
+# direto na porta 80, em HTTP puro.
 # Uso: make prod-up   (ou: docker compose -f docker-compose.prod.yml up -d --build)
 #
-# HTTP e não HTTPS é decisão do deploy, não descuido: o app é alcançado por IP,
-# sem domínio, e as portas 80/443 do IP público da empresa já pertencem a outro
-# sistema — sem domínio não há certificado automático. O que se perde está na
-# seção "Deploy" do README. O `Caddyfile` continua no repositório: no dia em que
-# houver um domínio, é ele que devolve HTTPS, PWA instalável e modo offline.
+# HTTP e não HTTPS é decisão do deploy, não descuido: o app roda numa VPS
+# alcançada por IP, sem domínio, e Let's Encrypt não emite certificado para
+# endereço IP. O que se perde está na seção "Deploy" do README. O `Caddyfile`
+# continua no repositório: no dia em que houver um domínio, é ele que devolve
+# HTTPS, PWA instalável e modo offline.
 
 # Log do Docker cresce sem limite por padrão e enche o disco do servidor com o
 # app parado do lado, sem aviso.
@@ -93,16 +93,15 @@ services:
     container_name: estoque_web
     restart: unless-stopped
     logging: *logging
-    # O nginx fala direto com a internet, sem proxy na frente. Porta 8080 e não
-    # 80 porque a 80 deste servidor é reivindicada pelo compose de produção do
-    # ERP vizinho (`/opt/fv-laticinios`); o roteador redireciona a 8080 pública
-    # para cá.
+    # O nginx fala direto com a internet, na porta 80 — a VPS é só do app e
+    # nada mais disputa a porta. É o que deixa o endereço em `http://<ip>`
+    # limpo, sem `:porta` para o promotor digitar errado.
     #
     # Sem proxy no caminho, o nginx lê o IP de origem da própria conexão — é o
     # que mantém de pé o rate limit por IP do /auth/login em `nginx.prod.conf`,
     # que antes dependia do X-Forwarded-For escrito pelo Caddy.
     ports:
-      - "8080:80"
+      - "80:80"
     depends_on:
       - api
     networks:

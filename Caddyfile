@@ -1,13 +1,15 @@
 # FORA DE USO no deploy atual — guardado de propósito.
 #
-# O app hoje roda em HTTP puro, por IP, na porta 8080, e o `docker-compose.
+# O app hoje roda em HTTP puro, por IP, na porta 80, e o `docker-compose.
 # prod.yml` não sobe serviço `caddy` nenhum. O motivo está no cabeçalho de lá:
 # sem domínio não há certificado automático.
 #
-# Este arquivo é o caminho de volta. Havendo um domínio, reintroduza o serviço
-# `caddy` no compose (publicando 80 e 443), preencha APP_DOMAIN no .env, e o
-# app recupera HTTPS, instalação como PWA e o modo offline. Nada do que está
-# no ar precisa ser refeito: banco, fotos e usuários seguem nos volumes.
+# Este arquivo é o caminho de volta. Havendo um domínio: reintroduza o serviço
+# `caddy` no compose publicando 80 e 443, tire o `ports:` do `web` (a 80 passa a
+# ser do Caddy), descomente o bloco `set_real_ip_from` do `nginx.prod.conf`,
+# preencha APP_DOMAIN no .env e troque o FRONTEND_URL para o `https://` do
+# domínio. O app recupera HTTPS, instalação como PWA e o modo offline. Nada do
+# que está no ar precisa ser refeito: banco, fotos e usuários seguem nos volumes.
 #
 # ── Abaixo, a configuração como estava ────────────────────────────────────
 #

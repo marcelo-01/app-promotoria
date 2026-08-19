@@ -98,17 +98,22 @@ preciso **HTTPS** — que o deploy atual não tem. Ver "O que este deploy não f
 
 A stack de produção é outra: `docker-compose.prod.yml`. Ela não monta o código do
 host, não roda `--reload` e serve o frontend compilado por nginx. Só o nginx
-publica porta (8080); API e banco ficam na rede interna do compose.
+publica porta (80); API e banco ficam na rede interna do compose.
 
 ```
-internet → nginx :8080 (SPA + /api/) → api → db
+internet → nginx :80 (SPA + /api/) → api → db
 ```
+
+O app roda numa **VPS Linux dedicada a ele**. O passo a passo de instalar a VPS
+do zero — Docker, firewall, chave de deploy, backup automático — está em
+[`DEPLOY_VPS.md`](DEPLOY_VPS.md). O que vem abaixo é a stack em si, que serve
+para qualquer hospedeiro.
 
 **Em HTTP puro, sem TLS.** Não é descuido: o app é alcançado por IP, sem domínio,
-e sem domínio não existe certificado automático. A alternativa seria uma CA
-própria com o certificado instalado à mão em cada celular, o que foi descartado.
-O `Caddyfile` continua no repositório e documenta o caminho de volta para quando
-houver um domínio.
+e Let's Encrypt não emite certificado para endereço IP. A alternativa seria uma
+CA própria com o certificado instalado à mão em cada celular, o que foi
+descartado. O `Caddyfile` continua no repositório e documenta o caminho de volta
+para quando houver um domínio.
 
 ### Configurar
 
@@ -124,7 +129,7 @@ Depois edite o `.env`. Estes cinco são o deploy inteiro:
 | `SECRET_KEY` | `openssl rand -hex 32` | **A API se recusa a subir** |
 | `POSTGRES_PASSWORD` (e a mesma em `DATABASE_PASSWORD` e dentro de `DATABASE_URL`) | `openssl rand -hex 16` | **A API se recusa a subir** |
 | `VITE_API_URL` | `/api` | O app quebra em todo celular, sem erro no servidor |
-| `FRONTEND_URL` | o endereço exato do app, **com a porta** (`http://<ip>:8080`) | O download da planilha falha por CORS |
+| `FRONTEND_URL` | o endereço exato pelo qual o navegador abre o app (`http://<ip>`) | O download da planilha falha por CORS |
 
 As duas primeiras são checadas na largada: subir com as credenciais do
 `.env.example` derruba a API com o motivo na primeira linha do log. Isso é de
@@ -195,12 +200,14 @@ os volumes moram no mesmo disco e somem junto com ele. Um `cron` diário resolve
 
 Para voltar um dump: `make prod-restore f=backups/banco_AAAAMMDD_HHMMSS.sql.gz`.
 
-### Hospedar num PC Windows
+### Onde o app é hospedado
 
-Se o servidor for uma máquina Windows em vez de uma VPS Linux, o app não muda —
-o que muda é o hospedeiro. O passo a passo (WSL2, Docker sem o Docker Desktop,
-rede, e como fazer tudo voltar sozinho depois de um reinício) está em
-[`DEPLOY_WINDOWS.md`](DEPLOY_WINDOWS.md).
+| Hospedeiro | Runbook | Situação |
+|---|---|---|
+| VPS Linux | [`DEPLOY_VPS.md`](DEPLOY_VPS.md) | **Em uso** |
+| PC Windows do escritório | [`DEPLOY_WINDOWS.md`](DEPLOY_WINDOWS.md) | Plano B, não adotado |
+
+O app não muda entre um e outro — o que muda é o hospedeiro.
 
 ### Comandos de produção
 
