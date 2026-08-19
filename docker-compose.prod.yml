@@ -1,12 +1,10 @@
 # Produção: sem bind mount de código, sem --reload, frontend servido por nginx
-# direto na porta 80, em HTTP puro.
+# e TLS terminado pelo Caddy.
 # Uso: make prod-up   (ou: docker compose -f docker-compose.prod.yml up -d --build)
 #
-# HTTP e não HTTPS é decisão do deploy, não descuido: o app roda numa VPS
-# alcançada por IP, sem domínio, e Let's Encrypt não emite certificado para
-# endereço IP. O que se perde está na seção "Deploy" do README. O `Caddyfile`
-# continua no repositório: no dia em que houver um domínio, é ele que devolve
-# HTTPS, PWA instalável e modo offline.
+# HTTPS não é enfeite: service worker e instalação de PWA só existem em contexto
+# seguro, e é o service worker que segura a contagem dentro do supermercado sem
+# sinal. O app tem domínio próprio por causa disso — ver o `Caddyfile`.
 
 # Log do Docker cresce sem limite por padrão e enche o disco do servidor com o
 # app parado do lado, sem aviso.
@@ -93,17 +91,35 @@ services:
     container_name: estoque_web
     restart: unless-stopped
     logging: *logging
-    # O nginx fala direto com a internet, na porta 80 — a VPS é só do app e
-    # nada mais disputa a porta. É o que deixa o endereço em `http://<ip>`
-    # limpo, sem `:porta` para o promotor digitar errado.
-    #
-    # Sem proxy no caminho, o nginx lê o IP de origem da própria conexão — é o
-    # que mantém de pé o rate limit por IP do /auth/login em `nginx.prod.conf`,
-    # que antes dependia do X-Forwarded-For escrito pelo Caddy.
-    ports:
-      - "80:80"
+    # Não publica porta no host: quem fala com a internet é o Caddy, e ele
+    # alcança este contêiner pela rede interna do compose. O IP real do cliente
+    # chega no X-Forwarded-For escrito pelo Caddy — é dele que depende o rate
+    # limit por IP do /auth/login em `nginx.prod.conf`.
     depends_on:
       - api
+    networks:
+      - estoque_network
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: estoque_caddy
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?defina APP_DOMAIN no .env}
+      CADDY_TLS: ${CADDY_TLS:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Os certificados vivem aqui. Sem este volume, cada redeploy pede um
+      # certificado novo e o Let's Encrypt bloqueia por excesso de emissões.
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
     networks:
       - estoque_network
 
@@ -111,6 +127,10 @@ volumes:
   estoque_pg_data:
     driver: local
   estoque_uploads:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
     driver: local
 
 networks:

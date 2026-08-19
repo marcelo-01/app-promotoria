@@ -92,28 +92,23 @@ O `vite.config.js` já expõe o dev server em `0.0.0.0:5174` e o CORS da API ace
 IPs de rede local. Acesse `http://<ip-da-maquina>:5174` pelo Wi-Fi.
 
 Para instalar como PWA de verdade (e testar o modo offline com service worker) é
-preciso **HTTPS** — que o deploy atual não tem. Ver "O que este deploy não faz".
+preciso **HTTPS** — em produção isso já vem pronto, ver a seção abaixo.
 
 ## Deploy em produção
 
 A stack de produção é outra: `docker-compose.prod.yml`. Ela não monta o código do
-host, não roda `--reload` e serve o frontend compilado por nginx. Só o nginx
-publica porta (80); API e banco ficam na rede interna do compose.
+host, não roda `--reload`, serve o frontend compilado por nginx e põe um **Caddy**
+na frente para o TLS. Só o Caddy publica porta (80 e 443); API, banco e nginx
+ficam na rede interna do compose.
 
 ```
-internet → nginx :80 (SPA + /api/) → api → db
+internet → caddy (TLS) → nginx (SPA + /api/) → api → db
 ```
 
 O app roda numa **VPS Linux dedicada a ele**. O passo a passo de instalar a VPS
-do zero — Docker, firewall, chave de deploy, backup automático — está em
+do zero — Docker, domínio, firewall, chave de deploy, backup automático — está em
 [`DEPLOY_VPS.md`](DEPLOY_VPS.md). O que vem abaixo é a stack em si, que serve
 para qualquer hospedeiro.
-
-**Em HTTP puro, sem TLS.** Não é descuido: o app é alcançado por IP, sem domínio,
-e Let's Encrypt não emite certificado para endereço IP. A alternativa seria uma
-CA própria com o certificado instalado à mão em cada celular, o que foi
-descartado. O `Caddyfile` continua no repositório e documenta o caminho de volta
-para quando houver um domínio.
 
 ### Configurar
 
@@ -129,33 +124,19 @@ Depois edite o `.env`. Estes cinco são o deploy inteiro:
 | `SECRET_KEY` | `openssl rand -hex 32` | **A API se recusa a subir** |
 | `POSTGRES_PASSWORD` (e a mesma em `DATABASE_PASSWORD` e dentro de `DATABASE_URL`) | `openssl rand -hex 16` | **A API se recusa a subir** |
 | `VITE_API_URL` | `/api` | O app quebra em todo celular, sem erro no servidor |
-| `FRONTEND_URL` | o endereço exato pelo qual o navegador abre o app (`http://<ip>`) | O download da planilha falha por CORS |
+| `APP_DOMAIN` | o domínio do app | O Caddy não sobe |
+| `FRONTEND_URL` | `https://<seu domínio>`, sem barra no fim | O download da planilha falha por CORS |
 
 As duas primeiras são checadas na largada: subir com as credenciais do
 `.env.example` derruba a API com o motivo na primeira linha do log. Isso é de
 propósito — a `SECRET_KEY` de exemplo está publicada neste repositório, e com ela
 qualquer um forja um token de administrador.
 
-### O que este deploy não faz
-
-Servir em HTTP puro tem três consequências, todas aceitas de olhos abertos:
-
-1. **Não instala como aplicativo no Android.** O Chrome só oferece "Instalar" em
-   contexto seguro. Dá para "Adicionar à tela inicial", mas o ícone abre o
-   Chrome com a barra de endereço à mostra, em vez de tela cheia. No iPhone o
-   Safari abre em tela cheia assim mesmo, por causa do
-   `apple-mobile-web-app-capable` que já está no `index.html`.
-
-2. **O app não abre sem sinal.** Sem contexto seguro o service worker não
-   registra, e nada é guardado em cache. A fila offline do `useOfflineQueue.js`
-   continua funcionando — ela é JavaScript comum e não depende de service
-   worker —, mas só enquanto a página seguir aberta: recarregar ou reabrir o app
-   sem rede cai na tela de erro do navegador.
-
-3. **Senha e token trafegam em claro**, inclusive no Wi-Fi do supermercado.
-
-As três somem no dia em que houver um domínio, sem refazer o deploy. O caminho
-de volta está no `Caddyfile`.
+**Sem domínio público** (rede interna da empresa): ponha em `APP_DOMAIN` o nome
+interno da máquina e `CADDY_TLS=tls internal` no `.env`. O Caddy passa a emitir o
+certificado com uma CA própria — que precisa ser instalada em cada celular, senão
+o navegador barra o acesso. O arquivo da CA sai em
+`docker compose -f docker-compose.prod.yml exec caddy cat /data/caddy/pki/authorities/local/root.crt`.
 
 ### Subir
 
@@ -182,8 +163,8 @@ git pull && make prod-up
 ```
 
 O `--build` refaz as imagens e as migrações pendentes sobem junto. Fotos
-(`estoque_uploads`) e banco (`estoque_pg_data`) estão em volumes e sobrevivem ao
-redeploy.
+(`estoque_uploads`), banco (`estoque_pg_data`) e certificados (`caddy_data`) estão
+em volumes e sobrevivem ao redeploy.
 
 ### Backup
 
