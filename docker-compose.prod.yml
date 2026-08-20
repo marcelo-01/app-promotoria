@@ -20,6 +20,13 @@ services:
     container_name: estoque_postgres
     restart: unless-stopped
     logging: *logging
+    # Publicada SÓ no loopback da VPS, para o túnel SSH do DBeaver ter onde
+    # chegar. O prefixo `127.0.0.1:` não é detalhe de estilo: escrito como
+    # "5432:5432" o Docker cria a própria regra de iptables, passa por cima do
+    # `ufw` e deixa o banco de produção aberto para a internet inteira sem uma
+    # única mensagem de aviso.
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
