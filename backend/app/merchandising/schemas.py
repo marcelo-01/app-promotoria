@@ -56,6 +56,9 @@ class CountSheetResponse(BaseModel):
     visit_type: str
     visit_id: Optional[UUID] = None
     status: Optional[str] = None
+    # Quadrado "não tem produtos aqui" — só vem marcado na folha de correção de
+    # um envio que foi feito assim
+    no_products: bool = False
     products: List[CountProductResponse] = []
 
 
@@ -99,6 +102,10 @@ class StockVisitCreate(BaseModel):
     client_uuid: Optional[str] = Field(default=None, max_length=64)
     visited_at: Optional[datetime] = None
     items: List[StockVisitItemInput] = []
+    # O promotor marcou "não tem produtos aqui": a contagem vale como feita e
+    # fecha o par gôndola + estoque, sem nenhum item. Os itens que porventura
+    # venham junto são ignorados — foi isso que ele declarou.
+    no_products: bool = False
     # true = já envia fechada; false = salva rascunho no servidor
     submit: bool = False
 
@@ -117,6 +124,7 @@ class StockVisitUpdate(BaseModel):
     """
 
     items: List[StockVisitItemInput] = []
+    no_products: bool = False
 
 
 class StockVisitItemResponse(BaseModel):
@@ -143,6 +151,11 @@ class StockVisitResponse(BaseModel):
     promoter_name: Optional[str] = None
     visit_type: str
     status: str
+    no_products: bool = False
+    # Lado que falta para o par fechar ('gondola'/'estoque'), ou None quando as
+    # duas contagens do dia já chegaram. Enquanto houver lado faltando, esta
+    # contagem não entra em nenhuma planilha.
+    missing_side: Optional[str] = None
     visited_at: Optional[datetime] = None
     submitted_at: Optional[datetime] = None
     exported_at: Optional[datetime] = None

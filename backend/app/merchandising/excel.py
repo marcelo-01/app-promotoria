@@ -1,20 +1,21 @@
-"""Geração das planilhas .xlsx entregues ao administrador."""
+"""Geração das planilhas .xlsx entregues ao administrador.
+
+Uma linha por produto, com os dois lugares lado a lado. A contagem da gôndola e
+a do estoque chegam separadas (são duas visitas), mas o administrador nunca vê
+isso: quem junta as duas é `consolidation`, e aqui só se desenha o resultado.
+"""
 from __future__ import annotations
 
-import logging
 from datetime import datetime, timezone
 from io import BytesIO
 from typing import Optional, Sequence
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from app.core.config import settings
-
-logger = logging.getLogger(__name__)
+from app.merchandising.consolidation import ConsolidatedRow, local_zone
 
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
@@ -22,38 +23,23 @@ _HEADERS = [
     ("Data da visita", 18),
     ("Cliente", 36),
     ("Promotor", 24),
-    ("Contagem", 12),
     ("Produto", 40),
-    ("Caixas", 10),
-    ("Unidades avulsas", 17),
-    ("Un. por caixa", 14),
-    ("Total (unidades)", 17),
+    ("Gôndola (un)", 15),
+    ("Estoque (un)", 15),
+    ("Total (un)", 14),
 ]
 
 # Colunas numéricas — formatadas depois de preencher. A última é o total.
-_FIRST_NUMBER_COLUMN = 6
+_FIRST_NUMBER_COLUMN = 5
 _TOTAL_COLUMN = len(_HEADERS)
 
 _HEADER_FILL = PatternFill("solid", fgColor="1A237E")   # mesma cor primária do ERP
 _HEADER_FONT = Font(color="FFFFFF", bold=True)
 _TOTAL_FONT = Font(bold=True)
 
-_VISIT_TYPE_LABEL = {"gondola": "Gôndola", "estoque": "Estoque"}
-
-
-def _local_zone() -> ZoneInfo:
-    """Fuso configurado, com UTC como último recurso.
-
-    Um `TIMEZONE` escrito errado no `.env` não pode derrubar a exportação — a
-    planilha sai em UTC e o aviso fica no log.
-    """
-    try:
-        return ZoneInfo(settings.timezone)
-    except (ZoneInfoNotFoundError, ValueError):
-        logger.warning(
-            "TIMEZONE inválido (%r) — a planilha sairá em UTC", settings.timezone
-        )
-        return ZoneInfo("UTC")
+# O promotor marcou "não tem produtos aqui". Texto e não zero: zero seria uma
+# contagem que deu zero, e é outra coisa.
+_SEM_PRODUTOS = "sem produtos"
 
 
 def _format_local(moment: Optional[datetime]) -> str:
@@ -68,26 +54,24 @@ def _format_local(moment: Optional[datetime]) -> str:
     # Linha vinda do SQLite (testes) volta ingênua; assume-se UTC, que é como foi gravada.
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
-    return moment.astimezone(_local_zone()).strftime("%d/%m/%Y %H:%M")
+    return moment.astimezone(local_zone()).strftime("%d/%m/%Y %H:%M")
 
 
-def _package_size(row) -> float:
-    """Unidades por caixa do produto. Nulo ou zero vira 1 — produto sem caixa
-    cadastrada é contado como se a caixa fosse a própria unidade."""
-    return float(row.package_size) if row.package_size else 1.0
+def _cell(quantidade: Optional[float], lado_vazio: bool):
+    """O que vai na célula de um dos lados.
 
-
-def _total_units(row) -> float:
-    """A conversão que o administrador espera: 1 caixa de 10 + 10 avulsas = 20.
-
-    Recalculada aqui, com o `package_size` de hoje, em vez de usar o total
-    gravado na contagem: se o cadastro do produto for corrigido, a planilha
-    seguinte já sai certa — inclusive para contagens antigas.
+    Três estados, e a diferença importa para quem lê: o número contado, o lado
+    inteiro declarado sem produtos, e o produto que não foi contado naquele
+    lugar (célula em branco).
     """
-    return float(row.boxes or 0) * _package_size(row) + float(row.units or 0)
+    if lado_vazio:
+        return _SEM_PRODUTOS
+    return "" if quantidade is None else quantidade
 
 
-def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
+def build_workbook(
+    rows: Sequence[ConsolidatedRow], sheet_title: str = "Consolidado"
+) -> BytesIO:
     wb = Workbook()
     ws = wb.active
     ws.title = sheet_title
@@ -103,14 +87,12 @@ def build_workbook(rows: Sequence, sheet_title: str = "Estoque") -> BytesIO:
     for r in rows:
         ws.append([
             _format_local(r.visited_at),
-            r.customer_name or "",
-            r.promoter_name or "",
-            _VISIT_TYPE_LABEL.get(r.visit_type, r.visit_type or ""),
-            r.product_name or "",
-            float(r.boxes or 0),
-            float(r.units or 0),
-            _package_size(r),
-            _total_units(r),
+            r.customer_name,
+            r.promoter_name,
+            r.product_name,
+            _cell(r.gondola, r.gondola_vazia),
+            _cell(r.estoque, r.estoque_vazio),
+            r.total,
         ])
 
     # Congela o cabeçalho e liga o autofiltro — o administrador vai filtrar muito
@@ -141,5 +123,5 @@ def xlsx_response(buf: BytesIO, filename: str) -> StreamingResponse:
 def default_filename(prefix: str = "estoque") -> str:
     # Mesmo fuso do conteúdo: baixar a planilha às 22h e receber um arquivo com
     # a data de amanhã no nome confunde na hora de achar o download.
-    stamp = datetime.now(timezone.utc).astimezone(_local_zone()).strftime("%Y%m%d_%H%M")
+    stamp = datetime.now(timezone.utc).astimezone(local_zone()).strftime("%Y%m%d_%H%M")
     return f"{prefix}_{stamp}.xlsx"

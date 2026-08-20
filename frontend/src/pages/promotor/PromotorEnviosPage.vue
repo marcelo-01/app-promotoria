@@ -59,7 +59,9 @@
                 </q-chip>
               </q-item-label>
               <q-item-label caption>
-                {{ formatHora(v.visited_at) }} · {{ v.items_count }} itens
+                {{ formatHora(v.visited_at) }} ·
+                <span v-if="v.no_products">sem produtos</span>
+                <span v-else>{{ v.items_count }} itens</span>
                 <span v-if="corrigido(v)"> · corrigida</span>
               </q-item-label>
             </q-item-section>

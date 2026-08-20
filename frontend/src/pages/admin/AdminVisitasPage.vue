@@ -1,7 +1,13 @@
 <template>
   <q-page class="q-pa-md">
     <div class="row items-center justify-between q-mb-md">
-      <div class="text-h6">Contagens recebidas</div>
+      <div>
+        <div class="text-h6">Contagens recebidas</div>
+        <div class="text-caption text-grey-7">
+          A planilha sai com gôndola e estoque juntos, uma linha por produto — e
+          só inclui o cliente cujas duas contagens do dia chegaram.
+        </div>
+      </div>
       <q-btn
         color="positive" icon="download" no-caps unelevated
         label="Baixar planilha do período" :loading="baixando"
@@ -63,6 +69,34 @@
         </q-td>
       </template>
 
+      <!-- O par: é isto que decide se esta contagem já pode virar planilha -->
+      <template #body-cell-missing_side="props">
+        <q-td :props="props">
+          <q-chip
+            v-if="props.row.status === 'draft'" dense square outline color="grey-7"
+          >
+            rascunho
+          </q-chip>
+          <q-chip
+            v-else-if="props.value" dense square outline
+            color="orange-9" icon="hourglass_top"
+          >
+            Aguardando {{ rotuloTipo(props.value).toLowerCase() }}
+          </q-chip>
+          <q-chip v-else dense square outline color="positive" icon="done_all">
+            Completa
+          </q-chip>
+        </q-td>
+      </template>
+
+      <!-- Contagem sem nenhum item é declaração de ausência, não item zerado -->
+      <template #body-cell-items_count="props">
+        <q-td :props="props" class="text-right">
+          <span v-if="props.row.no_products" class="text-grey-7">sem produtos</span>
+          <span v-else>{{ props.value }}</span>
+        </q-td>
+      </template>
+
       <template #body-cell-status="props">
         <q-td :props="props">
           <q-chip
@@ -84,9 +118,15 @@
           />
           <q-btn
             flat dense round icon="download" color="primary"
-            title="Baixar planilha desta contagem"
+            :disable="Boolean(props.row.missing_side) || props.row.status === 'draft'"
             @click="exportarUma(props.row.id)"
-          />
+          >
+            <q-tooltip>
+              {{ props.row.missing_side
+                ? `Falta a contagem de ${rotuloTipo(props.row.missing_side).toLowerCase()} deste cliente`
+                : 'Baixar a planilha deste cliente neste dia (gôndola + estoque)' }}
+            </q-tooltip>
+          </q-btn>
         </q-td>
       </template>
 
@@ -118,8 +158,24 @@
 
         <q-separator />
 
-        <q-card-section v-if="detalhe?.notes">
-          <q-banner dense class="bg-grey-2 rounded-borders">{{ detalhe.notes }}</q-banner>
+        <q-card-section v-if="detalhe?.no_products || detalhe?.missing_side || detalhe?.notes"
+                        class="q-gutter-sm">
+          <q-banner v-if="detalhe?.no_products" dense class="bg-grey-2 rounded-borders">
+            <template #avatar><q-icon name="do_not_disturb_on" color="grey-7" /></template>
+            O promotor informou que não havia nenhum produto
+            {{ detalhe.visit_type === 'gondola' ? 'na gôndola' : 'no estoque' }}.
+          </q-banner>
+
+          <q-banner v-if="detalhe?.missing_side" dense class="bg-orange-1 rounded-borders">
+            <template #avatar><q-icon name="hourglass_top" color="orange-9" /></template>
+            Aguardando a contagem de
+            {{ rotuloTipo(detalhe.missing_side).toLowerCase() }} deste cliente —
+            a planilha só sai com as duas.
+          </q-banner>
+
+          <q-banner v-if="detalhe?.notes" dense class="bg-grey-2 rounded-borders">
+            {{ detalhe.notes }}
+          </q-banner>
         </q-card-section>
 
         <q-list separator style="max-height: 55vh; overflow-y: auto">
@@ -189,6 +245,7 @@ const colunas = [
   { name: 'promoter_name', label: 'Promotor', field: 'promoter_name', align: 'left' },
   { name: 'visit_type', label: 'Contagem', field: 'visit_type', align: 'left' },
   { name: 'items_count', label: 'Itens', field: 'items_count', align: 'right' },
+  { name: 'missing_side', label: 'Par', field: 'missing_side', align: 'left' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
@@ -224,8 +281,14 @@ async function abrirDetalhe(id) {
 }
 
 async function exportarUma(id) {
-  await merchandisingApi.exportVisit(id)
-  // O download marca a contagem como processada — recarrega para refletir o status
+  try {
+    await merchandisingApi.exportVisit(id)
+  } catch (error) {
+    // Par incompleto: o servidor diz qual lado falta
+    $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
+    return
+  }
+  // O download marca as contagens do par como processadas — recarrega o status
   await carregar()
 }
 
@@ -235,10 +298,7 @@ async function exportarConsolidado() {
     await merchandisingApi.exportConsolidated(filtros)
     await carregar()
   } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error.response?.data?.detail || 'Erro ao gerar a planilha',
-    })
+    $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
   } finally {
     baixando.value = false
   }

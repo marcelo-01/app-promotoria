@@ -73,18 +73,17 @@ export const merchandisingApi = {
     return data
   },
 
+  /** Planilha de uma contagem — na prática, a do par dela: gôndola + estoque
+   *  do mesmo cliente no mesmo dia. Sem o par, o servidor recusa com o motivo. */
   async exportVisit(visitId) {
-    const response = await apiClient.get(
-      `/merchandising/visits/${visitId}/export.xlsx`,
-      { responseType: 'blob' }
-    )
+    const response = await baixar(`/merchandising/visits/${visitId}/export.xlsx`)
     downloadBlob(response)
   },
 
-  async exportConsolidated(params = {}) {
-    const response = await apiClient.get('/merchandising/exports.xlsx', {
+  /** Planilha do período. `visit_type` não entra: ela é sempre dos dois lugares. */
+  async exportConsolidated({ visit_type: _ignorado, ...params } = {}) {
+    const response = await baixar('/merchandising/exports.xlsx', {
       params: normalizeParams(params),
-      responseType: 'blob',
       timeout: 60000,
     })
     downloadBlob(response)
@@ -111,6 +110,33 @@ export const merchandisingApi = {
       product_ids: productIds,
     })
   },
+}
+
+/**
+ * GET de planilha, com o erro já legível.
+ *
+ * Com `responseType: 'blob'` o corpo do erro também volta como Blob — o
+ * `detail` que o servidor mandou ("a contagem de estoque ainda não chegou")
+ * fica ilegível dentro dele, e a tela acabaria mostrando um erro genérico bem
+ * onde o motivo importa.
+ */
+async function baixar(url, config = {}) {
+  try {
+    return await apiClient.get(url, { responseType: 'blob', ...config })
+  } catch (error) {
+    throw new Error((await detalheDoErro(error)) || 'Erro ao gerar a planilha')
+  }
+}
+
+/** O `detail` que o servidor mandou, de dentro do Blob de erro. */
+async function detalheDoErro(error) {
+  const corpo = error.response?.data
+  if (!(corpo instanceof Blob)) return corpo?.detail || null
+  try {
+    return JSON.parse(await corpo.text()).detail || null
+  } catch {
+    return null
+  }
 }
 
 /** Extrai o nome do arquivo do Content-Disposition e dispara o download. */

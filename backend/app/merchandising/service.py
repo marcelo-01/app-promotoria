@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
@@ -13,6 +13,7 @@ from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
+from app.merchandising import consolidation
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     CountProductResponse, CountSheetResponse, PromoterCustomerResponse,
@@ -124,6 +125,7 @@ class MerchandisingService:
             visit_type=visit.visit_type,
             visit_id=visit.id,
             status=visit.status,
+            no_products=visit.no_products,
             products=[
                 CountProductResponse(
                     id=product.id,
@@ -147,6 +149,8 @@ class MerchandisingService:
         await MerchandisingService._assert_can_access_customer(
             session, tenant_id, user, payload.customer_id
         )
+        if payload.submit:
+            MerchandisingService._assert_not_empty(payload.no_products, payload.items)
 
         visit = None
         if payload.client_uuid:
@@ -164,6 +168,7 @@ class MerchandisingService:
                 visit_type=payload.visit_type,
                 client_uuid=payload.client_uuid,
                 status=StockVisitStatus.DRAFT.value,
+                no_products=payload.no_products,
                 visited_at=payload.visited_at or now,
             )
         else:
@@ -178,6 +183,7 @@ class MerchandisingService:
                     detail="Esta contagem pertence a outro promotor.",
                 )
             visit.visit_type = payload.visit_type
+            visit.no_products = payload.no_products
             visit.visited_at = payload.visited_at or visit.visited_at or now
 
         if payload.submit:
@@ -189,7 +195,10 @@ class MerchandisingService:
         await Repo.replace_items(
             session, visit.id,
             await MerchandisingService._build_items(
-                session, tenant_id, visit.id, payload.items
+                session, tenant_id, visit.id,
+                # "Não tem produtos aqui" é a contagem inteira: o que estivesse
+                # digitado antes de marcar o quadrado não vai junto.
+                [] if payload.no_products else payload.items,
             ),
         )
 
@@ -207,11 +216,14 @@ class MerchandisingService:
         visit, _ = await MerchandisingService._load_editable_visit(
             session, tenant_id, user, visit_id
         )
+        MerchandisingService._assert_not_empty(payload.no_products, payload.items)
+        visit.no_products = payload.no_products
 
         await Repo.replace_items(
             session, visit.id,
             await MerchandisingService._build_items(
-                session, tenant_id, visit.id, payload.items
+                session, tenant_id, visit.id,
+                [] if payload.no_products else payload.items,
             ),
         )
 
@@ -291,11 +303,16 @@ class MerchandisingService:
             for item, product in item_rows
         ]
 
+        par = await MerchandisingService._pair_of(session, tenant_id, visit)
+
         return StockVisitResponse(
             id=visit.id, tenant_id=visit.tenant_id, customer_id=visit.customer_id,
             customer_name=customer_name,
             promoter_id=visit.promoter_id, promoter_name=promoter_name,
-            visit_type=visit.visit_type, status=visit.status, visited_at=visit.visited_at,
+            visit_type=visit.visit_type, status=visit.status,
+            no_products=visit.no_products,
+            missing_side=par.missing if par else None,
+            visited_at=visit.visited_at,
             submitted_at=visit.submitted_at, exported_at=visit.exported_at,
             notes=visit.notes, client_uuid=visit.client_uuid,
             items=items, items_count=len(items),
@@ -307,12 +324,18 @@ class MerchandisingService:
         session: AsyncSession, tenant_id: UUID, **filters
     ) -> tuple[list[StockVisitResponse], int]:
         rows, total = await Repo.list_visits(session, tenant_id, **filters)
+        faltando = await MerchandisingService._missing_sides(
+            session, tenant_id, [v for v, _, _, _ in rows]
+        )
         visits = [
             StockVisitResponse(
                 id=v.id, tenant_id=v.tenant_id, customer_id=v.customer_id,
                 customer_name=c_name,
                 promoter_id=v.promoter_id, promoter_name=p_name,
-                visit_type=v.visit_type, status=v.status, visited_at=v.visited_at,
+                visit_type=v.visit_type, status=v.status,
+                no_products=v.no_products,
+                missing_side=faltando.get(v.id),
+                visited_at=v.visited_at,
                 submitted_at=v.submitted_at, exported_at=v.exported_at,
                 notes=v.notes, client_uuid=v.client_uuid,
                 items=[], items_count=count,
@@ -322,7 +345,135 @@ class MerchandisingService:
         ]
         return visits, total
 
+    # ── O par gôndola + estoque ───────────────────────────────────────────
+
+    @staticmethod
+    async def _pair_of(
+        session: AsyncSession, tenant_id: UUID, visit
+    ) -> Optional[consolidation.Pair]:
+        """O par a que esta contagem pertence — ela e a do outro lugar, no mesmo
+        cliente, mesmo promotor, mesmo dia.
+
+        Devolve None para rascunho: contagem que o promotor ainda não fechou não
+        entra em par nenhum, e dizer que "falta o estoque" seria mentira.
+        """
+        if visit.status == StockVisitStatus.DRAFT.value:
+            return None
+
+        dia = consolidation.local_day(visit.visited_at)
+        inicio, fim = consolidation.day_window(dia) if dia else (None, None)
+
+        candidatas = await Repo.list_visits_for_pairing(
+            session, tenant_id,
+            customer_ids=[visit.customer_id], promoter_ids=[visit.promoter_id],
+            date_from=inicio, date_to=fim,
+        )
+        return consolidation.group_visits(candidatas).get(consolidation.group_key(visit))
+
+    @staticmethod
+    async def _missing_sides(
+        session: AsyncSession, tenant_id: UUID, visits: list
+    ) -> dict[UUID, Optional[str]]:
+        """{visit_id: lado que falta} para uma página inteira da lista.
+
+        Uma consulta só, limitada aos clientes e promotores que aparecem na
+        página e à janela de dias que ela cobre — e não uma por linha.
+        """
+        if not visits:
+            return {}
+
+        momentos = [v.visited_at for v in visits if v.visited_at]
+        inicio = min(momentos) - timedelta(days=1) if momentos else None
+        fim = max(momentos) + timedelta(days=1) if momentos else None
+
+        candidatas = await Repo.list_visits_for_pairing(
+            session, tenant_id,
+            customer_ids=list({v.customer_id for v in visits}),
+            promoter_ids=list({v.promoter_id for v in visits}),
+            date_from=inicio, date_to=fim,
+        )
+        return consolidation.missing_side_by_visit(candidatas)
+
+    # ── Planilha consolidada ──────────────────────────────────────────────
+
+    @staticmethod
+    async def consolidated_export(
+        session: AsyncSession, tenant_id: UUID,
+        promoter_id: Optional[UUID] = None, customer_id: Optional[UUID] = None,
+        date_from: Optional[datetime] = None, date_to: Optional[datetime] = None,
+    ) -> tuple[list, list[UUID]]:
+        """Linhas da planilha do período + as contagens que entraram nela.
+
+        A janela consultada é um dia maior de cada lado do filtro, e o recorte
+        final é feito por DIA LOCAL: sem isso, "de 19 a 19/08" traria a contagem
+        das 21h do dia 18 (que em UTC já é dia 19) e perderia a das 21h do dia
+        19 — e, pior, poderia cortar um par no meio.
+        """
+        visitas = await Repo.list_visits_for_pairing(
+            session, tenant_id,
+            customer_ids=[customer_id] if customer_id else None,
+            promoter_ids=[promoter_id] if promoter_id else None,
+            date_from=date_from - timedelta(days=1) if date_from else None,
+            date_to=date_to + timedelta(days=1) if date_to else None,
+        )
+
+        primeiro, ultimo = consolidation.day_bounds(date_from, date_to)
+        pares = [
+            par for par in consolidation.group_visits(visitas).values()
+            if par.complete and consolidation.within_days(par, primeiro, ultimo)
+        ]
+
+        itens = await Repo.list_export_items(
+            session, tenant_id, [vid for par in pares for vid in par.visit_ids]
+        )
+        return consolidation.build_rows(pares, itens)
+
+    @staticmethod
+    async def consolidated_export_for_visit(
+        session: AsyncSession, tenant_id: UUID, visit_id: UUID
+    ) -> tuple[list, list[UUID]]:
+        """A planilha de uma contagem é a planilha do par dela — nunca de um
+        lado só. Sem o par, o administrador recebe o motivo em vez do arquivo."""
+        row = await Repo.get_visit_detail(session, tenant_id, visit_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Contagem não encontrada")
+
+        visit = row[0]
+        par = await MerchandisingService._pair_of(session, tenant_id, visit)
+
+        if par is None or not par.complete:
+            faltando = par.missing if par else visit.visit_type
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "A contagem de "
+                    f"{consolidation.SIDE_LABEL.get(faltando, faltando)} deste "
+                    "cliente ainda não chegou. A planilha só sai com as duas."
+                ),
+            )
+
+        itens = await Repo.list_export_items(session, tenant_id, par.visit_ids)
+        return consolidation.build_rows([par], itens)
+
     # ── Guarda de acesso ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _assert_not_empty(no_products: bool, items: list) -> None:
+        """Contagem fechada tem que dizer alguma coisa: ou os produtos que o
+        promotor encontrou, ou o quadrado de que ali não há produto nenhum.
+
+        Uma contagem vazia sem esse quadrado fecharia o par e sairia na planilha
+        como se o cliente não tivesse mix — indistinguível de um engano.
+        """
+        if not no_products and not items:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    "Contagem vazia: preencha ao menos um produto ou marque "
+                    "que não há produtos neste lugar."
+                ),
+            )
+
 
     @staticmethod
     async def _load_editable_visit(

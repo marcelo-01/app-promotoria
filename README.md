@@ -14,15 +14,22 @@ arbitrárias e não são (as "6 âncoras", seção 3 do plano).
 um produto por tela (foto grande na metade de cima, dois campos embaixo: **caixas**
 e **unidades avulsas**) → envia. Produto sem nenhum número digitado não é enviado.
 Enviou, o cliente ganha um **visto verde** naquele tipo de contagem, que some
-sozinho na virada do dia.
+sozinho na virada do dia. Antes do primeiro produto há um quadrado só — **"não tem
+produtos aqui"** — para o lugar que hoje está vazio: é o que fecha a contagem sem
+inventar número nenhum.
 
 **Administrador** (desktop): cadastra clientes (só o nome), produtos (nome, foto e
 quantas unidades vêm numa caixa) e promotores (nome, e-mail e senha), define quais
 clientes cada promotor atende, e baixa as contagens em planilha `.xlsx` — já com
 as caixas convertidas em unidades.
 
-Gôndola e estoque do mesmo cliente são contagens independentes: cada uma tem sua
-data, sua planilha, sua "contagem anterior" e seu visto do dia.
+Gôndola e estoque do mesmo cliente são contagens independentes para o promotor:
+cada uma tem sua tela, sua "contagem anterior" e seu visto do dia. Para o
+administrador, não: **a planilha é uma só, com os dois lados lado a lado** (uma
+linha por produto: gôndola, estoque, total) e **só sai quando as duas contagens
+chegam** — mesmo cliente, mesmo promotor, mesmo dia. Enquanto faltar uma, a outra
+aparece como *aguardando* em **Contagens recebidas** e não entra em planilha
+nenhuma.
 
 ## Stack
 
@@ -71,7 +78,9 @@ Usuários criados pelo `seed`:
 4. **Clientes por promotor** → marque quais clientes ele atende e salve.
 5. *(Opcional)* **Cadastros → Mix por cliente** → escolha quais produtos são
    contados em cada cliente. Sem mix, o promotor vê o catálogo completo.
-6. Entre como o promotor (de preferência no celular) e faça uma contagem.
+6. Entre como o promotor (de preferência no celular) e faça as **duas** contagens
+   do cliente — gôndola e estoque. No lugar que estiver vazio, marque o quadrado
+   "não tem produtos aqui" em vez de deixar em branco.
 7. Volte ao admin em **Contagens recebidas** e baixe a planilha.
 
 ## Comandos
@@ -246,7 +255,14 @@ ou `products/` — se a fronteira estiver limpa, a fusão é copiar duas pastas.
   de um supermercado. Em disco, o service worker cacheia cada foto e a contagem
   funciona offline.
 - **`visit_type` (`gondola`/`estoque`) na visita.** O promotor conta os dois lugares
-  separadamente.
+  separadamente — mas o administrador recebe os dois juntos. Quem casa as duas
+  pontas é `merchandising/consolidation.py`, por cliente + promotor + dia local
+  (o dia de quem lê a planilha, não o UTC do servidor: senão a contagem das 22h
+  cairia no dia seguinte e se separaria do próprio par).
+- **`no_products` na visita.** "Estive aqui e não há nada" é diferente de "não
+  contei" e diferente de "contei e deu zero". Sem essa coluna, o cliente que não
+  tem produto num dos dois lugares nunca fecharia o par e travaria o download —
+  ou o promotor seria obrigado a digitar um zero que não é verdade.
 - **`boxes` e `units` no item, e `quantity` com o total convertido.** O cliente tem
   "1 caixa e 5 unidades" do mesmo produto — não uma coisa ou outra. Os dois números
   ficam gravados como foram digitados; `quantity` guarda

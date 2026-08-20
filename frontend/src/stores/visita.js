@@ -83,7 +83,7 @@ const numero = (value) =>
   value === null || value === undefined || value === '' ? null : Number(value)
 
 export const useVisitaStore = defineStore('visita', () => {
-  // { [customerId|visitType]: { client_uuid, visited_at, items: { [productId]: {...} } } }
+  // { [customerId|visitType]: { client_uuid, visited_at, no_products, items: { [productId]: {...} } } }
   const drafts = ref(migrateItems(dropLegacyDrafts(load(DRAFTS_KEY))))
   // Contagens fechadas que ainda não subiram
   const queue = ref(JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'))
@@ -107,6 +107,8 @@ export const useVisitaStore = defineStore('visita', () => {
         visit_type: visitType,
         client_uuid: newUuid(),
         visited_at: new Date().toISOString(),
+        // Quadrado "não tem produtos aqui", marcado no topo da tela
+        no_products: false,
         items: {},
       }
       persist()
@@ -127,6 +129,14 @@ export const useVisitaStore = defineStore('visita', () => {
     } else {
       draft.items[productId] = { product_id: productId, boxes: caixas, units: unidades }
     }
+    persist()
+  }
+
+  /** O promotor declarou que não há produto nenhum neste lugar hoje.
+   *  Fica no rascunho junto com o resto: sair da tela não perde a marcação, e
+   *  o que já tinha sido digitado continua guardado caso ele desmarque. */
+  function setSemProdutos(customerId, visitType, valor) {
+    getDraft(customerId, visitType).no_products = Boolean(valor)
     persist()
   }
 
@@ -160,13 +170,17 @@ export const useVisitaStore = defineStore('visita', () => {
   /** Fecha a contagem: tenta enviar; se falhar, enfileira para reenvio. */
   async function submit(customerId, visitType) {
     const draft = getDraft(customerId, visitType)
+    const semProdutos = Boolean(draft.no_products)
     const payload = {
       customer_id: customerId,
       visit_type: visitType,
       client_uuid: draft.client_uuid,
       visited_at: draft.visited_at,
+      no_products: semProdutos,
+      // "Não tem produtos aqui" manda a contagem vazia: o que estivesse
+      // digitado antes de marcar o quadrado não vai junto.
       // Campo deixado em branco vira 0 só aqui, na hora de fechar a contagem
-      items: Object.values(draft.items).map((item) => ({
+      items: semProdutos ? [] : Object.values(draft.items).map((item) => ({
         product_id: item.product_id,
         boxes: item.boxes || 0,
         units: item.units || 0,
@@ -227,7 +241,7 @@ export const useVisitaStore = defineStore('visita', () => {
 
   return {
     drafts, queue, concluidas, sending, pendingCount,
-    getDraft, setItem, itemsCount, clearDraft, submit, flushQueue,
+    getDraft, setItem, setSemProdutos, itemsCount, clearDraft, submit, flushQueue,
     marcarConcluida, concluidaHoje, aguardandoEnvio,
   }
 })

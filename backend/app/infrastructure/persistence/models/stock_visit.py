@@ -2,7 +2,8 @@ import enum
 from uuid import uuid4
 
 from sqlalchemy import (
-    Column, Date, DateTime, ForeignKey, Index, Numeric, String, Text, UniqueConstraint,
+    Boolean, Column, Date, DateTime, ForeignKey, Index, Numeric, String, Text,
+    UniqueConstraint, false,
 )
 from sqlalchemy import Uuid as UUID
 
@@ -52,6 +53,11 @@ class StockVisit(DeclarativeBase, TimestampMixin):
     # String e não Enum nativo: mesmo padrão de `orders.order_status` no ERP,
     # que evita ALTER TYPE a cada novo status.
     status = Column(String(20), nullable=False, default=StockVisitStatus.DRAFT.value)
+
+    # "Estive aqui e não há nada": contagem sem nenhum item, de propósito.
+    # É diferente de uma contagem que deu zero — e é o que permite fechar o par
+    # gôndola + estoque quando um dos dois lugares simplesmente não tem produto.
+    no_products = Column(Boolean, nullable=False, default=False, server_default=false())
 
     visited_at = Column(DateTime(timezone=True), nullable=True)    # data real da contagem
     submitted_at = Column(DateTime(timezone=True), nullable=True)

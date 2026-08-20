@@ -319,60 +319,80 @@ class MerchandisingRepository:
         return rows, total
 
     @staticmethod
-    async def export_rows(
+    async def list_visits_for_pairing(
         session: AsyncSession,
         tenant_id: UUID,
-        visit_ids: Optional[list[UUID]] = None,
-        promoter_id: Optional[UUID] = None,
-        customer_id: Optional[UUID] = None,
-        visit_type: Optional[str] = None,
+        customer_ids: Optional[Sequence[UUID]] = None,
+        promoter_ids: Optional[Sequence[UUID]] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
     ) -> Sequence:
-        """Linhas achatadas (uma por item) prontas para a planilha."""
+        """Contagens enviadas, sem os itens, com nome de cliente e promotor.
+
+        Sem join com os itens de propósito: a contagem declarada "sem produtos"
+        não tem item nenhum e precisa entrar no par do mesmo jeito — é ela que
+        destrava a planilha do cliente que não tinha nada num dos dois lugares.
+        """
         query = (
             select(
-                StockVisit.id.label("visit_id"),
+                StockVisit.id,
+                StockVisit.customer_id,
+                StockVisit.promoter_id,
+                StockVisit.visit_type,
                 StockVisit.visited_at,
                 StockVisit.submitted_at,
-                StockVisit.visit_type,
+                StockVisit.created_at,
+                StockVisit.no_products,
                 Customer.name.label("customer_name"),
                 User.full_name.label("promoter_name"),
-                Product.name.label("product_name"),
-                # A planilha entrega o total em unidades, mas mostra também o que
-                # o promotor digitou e o fator usado — é como o administrador
-                # confere a conversão sem abrir o app.
-                Product.package_size,
-                StockVisitItem.boxes,
-                StockVisitItem.units,
-                StockVisitItem.quantity,
             )
-            .select_from(StockVisitItem)
-            .join(StockVisit, StockVisit.id == StockVisitItem.visit_id)
+            .select_from(StockVisit)
             .join(Customer, Customer.id == StockVisit.customer_id, isouter=True)
             .join(User, User.id == StockVisit.promoter_id, isouter=True)
-            .join(Product, Product.id == StockVisitItem.product_id, isouter=True)
             .where(
                 StockVisit.tenant_id == tenant_id,
                 StockVisit.status != StockVisitStatus.DRAFT.value,
             )
         )
 
-        if visit_ids:
-            query = query.where(StockVisit.id.in_(visit_ids))
-        if promoter_id:
-            query = query.where(StockVisit.promoter_id == promoter_id)
-        if customer_id:
-            query = query.where(StockVisit.customer_id == customer_id)
-        if visit_type:
-            query = query.where(StockVisit.visit_type == visit_type)
+        if customer_ids is not None:
+            query = query.where(StockVisit.customer_id.in_(customer_ids))
+        if promoter_ids is not None:
+            query = query.where(StockVisit.promoter_id.in_(promoter_ids))
         if date_from:
             query = query.where(StockVisit.visited_at >= date_from)
         if date_to:
             query = query.where(StockVisit.visited_at <= date_to)
 
-        query = query.order_by(
-            StockVisit.visited_at, Customer.name, StockVisit.visit_type, Product.name
+        return (await session.execute(query)).all()
+
+    @staticmethod
+    async def list_export_items(
+        session: AsyncSession, tenant_id: UUID, visit_ids: Sequence[UUID]
+    ) -> Sequence:
+        """Itens das contagens informadas, achatados para a planilha.
+
+        Traz o `package_size` de hoje em vez do total gravado: a conversão é
+        refeita na planilha, e o cadastro corrigido conserta contagens antigas.
+        """
+        if not visit_ids:
+            return []
+
+        query = (
+            select(
+                StockVisitItem.visit_id,
+                StockVisitItem.product_id,
+                Product.name.label("product_name"),
+                Product.package_size,
+                StockVisitItem.boxes,
+                StockVisitItem.units,
+            )
+            .select_from(StockVisitItem)
+            .join(Product, Product.id == StockVisitItem.product_id, isouter=True)
+            .where(
+                StockVisitItem.tenant_id == tenant_id,
+                StockVisitItem.visit_id.in_(visit_ids),
+            )
         )
         return (await session.execute(query)).all()
 

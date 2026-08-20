@@ -22,18 +22,39 @@
     </div>
 
     <q-banner
-      v-else-if="!products.length"
+      v-else-if="!products.length && !editando"
       class="bg-grey-2 text-grey-8 rounded-borders q-ma-md"
     >
       <template #avatar><q-icon name="inventory_2" color="grey-6" /></template>
-      <template v-if="editando">Este envio não tem nenhum produto para corrigir.</template>
-      <template v-else>
-        Nenhum produto cadastrado para este cliente. Fale com o administrador.
-      </template>
+      Nenhum produto cadastrado para este cliente. Fale com o administrador.
     </q-banner>
 
     <div v-else class="painel-scroll">
-      <section v-for="(product, index) in products" :key="product.id" class="painel">
+      <!-- ── O quadrado, antes de tudo: "aqui não tem produto" ───────── -->
+      <section class="declaracao">
+        <div class="declaracao-card">
+          <q-checkbox
+            v-model="semProdutos" size="lg" color="primary"
+            :disable="!podeDeclarar"
+            @update:model-value="marcarSemProdutos"
+          >
+            <div class="q-ml-xs">
+              <div class="text-weight-bold">Não tem produtos {{ ondeLabel }}</div>
+              <div class="text-caption text-grey-7">
+                Marque se hoje não há nenhum produto {{ ondeLabel }} deste cliente.
+                A contagem é enviada assim mesmo.
+              </div>
+            </div>
+          </q-checkbox>
+
+          <div v-if="!podeDeclarar" class="text-caption text-orange-9 q-mt-sm">
+            Este envio foi feito sem produtos. Para contar produtos aqui, faça uma
+            contagem nova por este cliente.
+          </div>
+        </div>
+      </section>
+
+      <section v-for="(product, index) in produtosVisiveis" :key="product.id" class="painel">
         <!-- ── Foto: metade de cima da tela ──────────────────────────── -->
         <div class="foto">
           <img
@@ -111,18 +132,24 @@
     </div>
 
     <!-- ── Barra de envio ──────────────────────────────────────────── -->
-    <div v-if="products.length" class="barra-envio row items-center q-gutter-sm">
+    <div v-if="products.length || semProdutos" class="barra-envio row items-center q-gutter-sm">
       <div class="col text-caption text-grey-8">
-        <div class="text-weight-bold text-body2">{{ preenchidos }} de {{ products.length }}</div>
-        produtos preenchidos
+        <template v-if="semProdutos">
+          <div class="text-weight-bold text-body2">Sem produtos</div>
+          {{ ondeLabel }}
+        </template>
+        <template v-else>
+          <div class="text-weight-bold text-body2">{{ preenchidos }} de {{ products.length }}</div>
+          produtos preenchidos
+        </template>
       </div>
       <q-btn
         size="lg" unelevated no-caps class="col-auto"
         :color="editando ? 'primary' : 'positive'"
         :icon="editando ? 'save' : 'cloud_upload'"
         :label="editando ? 'Salvar' : 'Enviar'"
-        :disable="preenchidos === 0" :loading="enviando"
-        @click="editando ? salvarCorrecao() : confirmarEnvio()"
+        :disable="!semProdutos && preenchidos === 0" :loading="enviando"
+        @click="editando ? confirmarCorrecao() : confirmarEnvio()"
       />
     </div>
   </q-page>
@@ -159,6 +186,23 @@ const products = ref([])
 const form = reactive({})
 const loading = ref(false)
 const enviando = ref(false)
+
+// "Não tem produtos aqui": o quadrado no topo da lista
+const semProdutos = ref(false)
+// Onde esta contagem é feita. Na correção, vem do envio e não da URL.
+const tipo = ref(props.visitType)
+
+const ondeLabel = computed(() => (tipo.value === 'gondola' ? 'na gôndola' : 'no estoque'))
+
+/** Quadrado marcado: não há produto para contar, então não há painel para
+ *  mostrar. Some a lista em vez de apagar o que já estava digitado — desmarcar
+ *  traz tudo de volta. */
+const produtosVisiveis = computed(() => (semProdutos.value ? [] : products.value))
+
+/** Na correção de um envio feito sem produtos não há o que desmarcar: a folha
+ *  não traz produto nenhum para preencher. O quadrado fica visível, mostrando o
+ *  que foi declarado, mas travado. */
+const podeDeclarar = computed(() => !editando.value || products.value.length > 0)
 
 const preenchido = (productId) =>
   form[productId].boxes !== '' || form[productId].units !== ''
@@ -201,6 +245,13 @@ function ajustar(productId, campo, delta) {
   persistir(productId)
 }
 
+/** Grava a marcação no rascunho. O que já estava digitado continua lá: o
+ *  promotor que marcou sem querer desmarca e encontra tudo como deixou. */
+function marcarSemProdutos(valor) {
+  if (editando.value) return
+  visita.setSemProdutos(props.customerId, tipo.value, valor)
+}
+
 function limpar(productId) {
   form[productId].boxes = ''
   form[productId].units = ''
@@ -208,6 +259,15 @@ function limpar(productId) {
 }
 
 function confirmarEnvio() {
+  if (semProdutos.value) {
+    return $q.dialog({
+      title: 'Enviar sem produtos?',
+      message: `Você está informando que hoje não há nenhum produto ${ondeLabel.value} deste cliente.`,
+      cancel: { label: 'Voltar', flat: true, noCaps: true },
+      ok: { label: 'Enviar', color: 'positive', unelevated: true, noCaps: true },
+    }).onOk(enviar)
+  }
+
   const faltando = products.value.length - preenchidos.value
   if (faltando === 0) return enviar()
 
@@ -221,7 +281,7 @@ function confirmarEnvio() {
 
 async function enviar() {
   enviando.value = true
-  const { sent } = await visita.submit(props.customerId, props.visitType)
+  const { sent } = await visita.submit(props.customerId, tipo.value)
   enviando.value = false
 
   $q.notify({
@@ -243,18 +303,36 @@ async function enviar() {
  * mais honesto avisar e deixar o promotor tentar de novo do que guardar a
  * correção num aparelho onde ela pode ficar semanas sem subir.
  */
+/** Marcar o quadrado numa correção apaga o que já tinha sido contado —
+ *  confirma antes, como no envio. */
+function confirmarCorrecao() {
+  if (!semProdutos.value || !products.value.length) return salvarCorrecao()
+
+  $q.dialog({
+    title: 'Salvar sem produtos?',
+    message: `Os ${products.value.length} produto(s) deste envio serão apagados, e a contagem passa a informar que não há nada ${ondeLabel.value}.`,
+    cancel: { label: 'Voltar', flat: true, noCaps: true },
+    ok: { label: 'Salvar', color: 'primary', unelevated: true, noCaps: true },
+  }).onOk(salvarCorrecao)
+}
+
 async function salvarCorrecao() {
+  // Produto que ficou com os dois campos em branco sai da contagem
+  const itens = semProdutos.value
+    ? []
+    : products.value
+      .filter((product) => preenchido(product.id))
+      .map((product) => ({
+        product_id: product.id,
+        boxes: form[product.id].boxes || 0,
+        units: form[product.id].units || 0,
+      }))
+
   enviando.value = true
   try {
     await merchandisingApi.updateVisit(props.visitId, {
-      // Produto que ficou com os dois campos em branco sai da contagem
-      items: products.value
-        .filter((product) => preenchido(product.id))
-        .map((product) => ({
-          product_id: product.id,
-          boxes: form[product.id].boxes || 0,
-          units: form[product.id].units || 0,
-        })),
+      no_products: semProdutos.value,
+      items: itens,
     })
     $q.notify({ type: 'positive', message: 'Contagem corrigida.', position: 'top' })
     router.push({ name: 'PromotorEnvios' })
@@ -284,6 +362,10 @@ onMounted(async () => {
     const draft = editando.value
       ? { items: {} }
       : visita.getDraft(props.customerId, props.visitType)
+
+    // Na correção o tipo vem do envio; na contagem nova, da URL.
+    tipo.value = sheet.visit_type || props.visitType
+    semProdutos.value = Boolean(editando.value ? sheet.no_products : draft.no_products)
 
     sheet.products.forEach((product) => {
       // Na correção o ponto de partida é o que está gravado no envio; na
@@ -337,6 +419,20 @@ function numeroDoCampo(value) {
   scroll-snap-stop: always;
   padding: 8px;
   gap: 8px;
+}
+
+/* O quadrado do topo: alto o bastante para ser lido de relance, baixo o
+   bastante para o primeiro produto aparecer logo abaixo dele. */
+.declaracao {
+  scroll-snap-align: start;
+  padding: 8px 8px 0;
+}
+
+.declaracao-card {
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  padding: 10px 12px;
 }
 
 /* ── Foto ─────────────────────────────────────────────────────────── */
@@ -472,6 +568,7 @@ function numeroDoCampo(value) {
 
 /* A foto mantém o azul nos dois temas — é ele que dá o contraste com a embalagem. */
 .body--dark .quadro,
+.body--dark .declaracao-card,
 .body--dark .barra-envio {
   background: #1e1e2e;
   border-color: rgba(255, 255, 255, 0.12);

@@ -157,12 +157,14 @@ async def export_visit(
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
-    rows = await Repo.export_rows(session, context["tenant_id"], visit_ids=[visit_id])
-    if not rows:
-        raise HTTPException(status_code=404, detail="Contagem sem itens ou inexistente")
+    """Planilha de uma contagem — ou seja, do par dela: a gôndola e o estoque
+    daquele cliente naquele dia, juntos. Sem o par, devolve 409 com o motivo."""
+    rows, visit_ids = await MerchandisingService.consolidated_export_for_visit(
+        session, context["tenant_id"], visit_id
+    )
     buf = excel.build_workbook(rows)
     await Repo.mark_exported(
-        session, context["tenant_id"], [visit_id], datetime.now(timezone.utc)
+        session, context["tenant_id"], visit_ids, datetime.now(timezone.utc)
     )
     return excel.xlsx_response(buf, excel.default_filename("contagem"))
 
@@ -180,23 +182,34 @@ async def get_visit(
 async def export_consolidated(
     promoter_id: Optional[UUID] = None,
     customer_id: Optional[UUID] = None,
-    visit_type: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
-    rows = await Repo.export_rows(
+    """Planilha do período: uma linha por produto, gôndola e estoque lado a lado.
+
+    Sem filtro por tipo de contagem — a planilha é sempre dos dois. Só entram os
+    clientes cujas duas contagens do dia chegaram.
+    """
+    rows, visit_ids = await MerchandisingService.consolidated_export(
         session, context["tenant_id"],
-        promoter_id=promoter_id, customer_id=customer_id, visit_type=visit_type,
+        promoter_id=promoter_id, customer_id=customer_id,
         date_from=date_from, date_to=date_to,
     )
+    if not rows:
+        # Planilha vazia não diz o que houve; esta mensagem diz.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Nenhuma contagem completa neste período. A planilha só inclui "
+                "clientes com as duas contagens do dia — gôndola e estoque."
+            ),
+        )
+
     buf = excel.build_workbook(rows, sheet_title="Consolidado")
     await Repo.mark_exported(
-        session,
-        context["tenant_id"],
-        list({row.visit_id for row in rows}),
-        datetime.now(timezone.utc),
+        session, context["tenant_id"], visit_ids, datetime.now(timezone.utc)
     )
     return excel.xlsx_response(buf, excel.default_filename("estoque_consolidado"))
 
