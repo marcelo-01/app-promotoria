@@ -332,17 +332,30 @@ class MerchandisingRepository:
         Sem join com os itens de propósito: a contagem declarada "sem produtos"
         não tem item nenhum e precisa entrar no par do mesmo jeito — é ela que
         destrava a planilha do cliente que não tinha nada num dos dois lugares.
+        Por isso a quantidade de itens vem de subconsulta correlacionada e não de
+        join: contar sem multiplicar linhas, e devolver 0 em vez de sumir.
         """
+        items_count = (
+            select(func.count())
+            .select_from(StockVisitItem)
+            .where(StockVisitItem.visit_id == StockVisit.id)
+            .correlate(StockVisit)
+            .scalar_subquery()
+        )
+
         query = (
             select(
                 StockVisit.id,
                 StockVisit.customer_id,
                 StockVisit.promoter_id,
                 StockVisit.visit_type,
+                StockVisit.status,
                 StockVisit.visited_at,
                 StockVisit.submitted_at,
+                StockVisit.exported_at,
                 StockVisit.created_at,
                 StockVisit.no_products,
+                items_count.label("items_count"),
                 Customer.name.label("customer_name"),
                 User.full_name.label("promoter_name"),
             )

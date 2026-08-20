@@ -4,8 +4,9 @@
       <div>
         <div class="text-h6">Contagens recebidas</div>
         <div class="text-caption text-grey-7">
-          A planilha sai com gôndola e estoque juntos, uma linha por produto — e
-          só inclui o cliente cujas duas contagens do dia chegaram.
+          Uma linha por ida do promotor à loja, com gôndola e estoque juntos —
+          igual à planilha, que só inclui o cliente cujas duas contagens do dia
+          chegaram.
         </div>
       </div>
       <q-btn
@@ -15,7 +16,8 @@
       />
     </div>
 
-    <!-- Filtros -->
+    <!-- Filtros. Não há filtro por tipo de contagem: a linha é sempre dos dois
+         lugares, e filtrar um lado só traria de volta as meias visitas. -->
     <q-card flat bordered class="q-mb-md">
       <q-card-section class="row q-col-gutter-md">
         <div class="col-12 col-md-3">
@@ -36,16 +38,9 @@
         </div>
         <div class="col-12 col-md-3">
           <q-select
-            v-model="filtros.visit_type" outlined dense clearable
-            label="Contagem" :options="tiposContagem"
-            option-value="value" option-label="label" emit-value map-options
-            @update:model-value="recarregar"
-          />
-        </div>
-        <div class="col-12 col-md-3">
-          <q-select
             v-model="filtros.status" outlined dense clearable
-            label="Status" :options="['submitted', 'exported']"
+            label="Status" :options="statusOpcoes"
+            option-value="value" option-label="label" emit-value map-options
             @update:model-value="recarregar"
           />
         </div>
@@ -57,28 +52,30 @@
       :loading="carregando" flat bordered
       v-model:pagination="paginacao" @request="carregar"
     >
-      <template #body-cell-visit_type="props">
-        <q-td :props="props">
-          <q-chip
-            dense square outline
-            :color="props.value === 'gondola' ? 'primary' : 'teal-8'"
-            :icon="props.value === 'gondola' ? 'shelves' : 'inventory_2'"
-          >
-            {{ rotuloTipo(props.value) }}
-          </q-chip>
+      <!-- Os dois lados da mesma visita, um em cada coluna. Célula vazia é
+           contagem que ainda não chegou; "sem produtos" é o promotor dizendo
+           que passou lá e não havia nada — não é a mesma coisa. -->
+      <template #body-cell-gondola="props">
+        <q-td :props="props" class="text-right">
+          <span v-if="!props.row.gondola" class="text-orange-9">não chegou</span>
+          <span v-else-if="props.row.gondola.no_products" class="text-grey-7">sem produtos</span>
+          <span v-else>{{ props.row.gondola.items_count }}</span>
         </q-td>
       </template>
 
-      <!-- O par: é isto que decide se esta contagem já pode virar planilha -->
+      <template #body-cell-estoque="props">
+        <q-td :props="props" class="text-right">
+          <span v-if="!props.row.estoque" class="text-orange-9">não chegou</span>
+          <span v-else-if="props.row.estoque.no_products" class="text-grey-7">sem produtos</span>
+          <span v-else>{{ props.row.estoque.items_count }}</span>
+        </q-td>
+      </template>
+
+      <!-- É isto que decide se esta visita já pode virar planilha -->
       <template #body-cell-missing_side="props">
         <q-td :props="props">
           <q-chip
-            v-if="props.row.status === 'draft'" dense square outline color="grey-7"
-          >
-            rascunho
-          </q-chip>
-          <q-chip
-            v-else-if="props.value" dense square outline
+            v-if="props.value" dense square outline
             color="orange-9" icon="hourglass_top"
           >
             Aguardando {{ rotuloTipo(props.value).toLowerCase() }}
@@ -86,14 +83,6 @@
           <q-chip v-else dense square outline color="positive" icon="done_all">
             Completa
           </q-chip>
-        </q-td>
-      </template>
-
-      <!-- Contagem sem nenhum item é declaração de ausência, não item zerado -->
-      <template #body-cell-items_count="props">
-        <q-td :props="props" class="text-right">
-          <span v-if="props.row.no_products" class="text-grey-7">sem produtos</span>
-          <span v-else>{{ props.value }}</span>
         </q-td>
       </template>
 
@@ -113,13 +102,13 @@
         <q-td :props="props" class="text-right">
           <q-btn
             flat dense round icon="visibility" color="grey-7"
-            title="Ver itens desta contagem"
-            @click="abrirDetalhe(props.row.id)"
+            title="Ver os itens desta visita"
+            @click="abrirDetalhe(props.row)"
           />
           <q-btn
             flat dense round icon="download" color="primary"
-            :disable="Boolean(props.row.missing_side) || props.row.status === 'draft'"
-            @click="exportarUma(props.row.id)"
+            :disable="Boolean(props.row.missing_side)"
+            @click="exportarUma(props.row)"
           >
             <q-tooltip>
               {{ props.row.missing_side
@@ -137,20 +126,15 @@
       </template>
     </q-table>
 
-    <!-- Detalhe da contagem -->
+    <!-- Detalhe da visita: os dois lados, um embaixo do outro -->
     <q-dialog v-model="detalheAberto">
       <q-card style="min-width: 340px; max-width: 720px; width: 90vw">
         <q-card-section class="row items-center justify-between">
           <div>
-            <div class="text-subtitle1">
-              {{ detalhe?.customer_name }}
-              <q-chip dense square outline
-                      :color="detalhe?.visit_type === 'gondola' ? 'primary' : 'teal-8'">
-                {{ rotuloTipo(detalhe?.visit_type) }}
-              </q-chip>
-            </div>
+            <div class="text-subtitle1">{{ detalhe?.linha?.customer_name }}</div>
             <div class="text-caption text-grey-7">
-              {{ detalhe?.promoter_name }} · {{ formatData(detalhe?.visited_at) }}
+              {{ detalhe?.linha?.promoter_name }} ·
+              {{ formatData(detalhe?.linha?.visited_at) }}
             </div>
           </div>
           <q-btn flat dense round icon="close" v-close-popup />
@@ -158,42 +142,62 @@
 
         <q-separator />
 
-        <q-card-section v-if="detalhe?.no_products || detalhe?.missing_side || detalhe?.notes"
-                        class="q-gutter-sm">
-          <q-banner v-if="detalhe?.no_products" dense class="bg-grey-2 rounded-borders">
-            <template #avatar><q-icon name="do_not_disturb_on" color="grey-7" /></template>
-            O promotor informou que não havia nenhum produto
-            {{ detalhe.visit_type === 'gondola' ? 'na gôndola' : 'no estoque' }}.
-          </q-banner>
-
-          <q-banner v-if="detalhe?.missing_side" dense class="bg-orange-1 rounded-borders">
+        <q-card-section v-if="detalhe?.linha?.missing_side" class="q-pb-none">
+          <q-banner dense class="bg-orange-1 rounded-borders">
             <template #avatar><q-icon name="hourglass_top" color="orange-9" /></template>
             Aguardando a contagem de
-            {{ rotuloTipo(detalhe.missing_side).toLowerCase() }} deste cliente —
+            {{ rotuloTipo(detalhe.linha.missing_side).toLowerCase() }} deste cliente —
             a planilha só sai com as duas.
-          </q-banner>
-
-          <q-banner v-if="detalhe?.notes" dense class="bg-grey-2 rounded-borders">
-            {{ detalhe.notes }}
           </q-banner>
         </q-card-section>
 
-        <q-list separator style="max-height: 55vh; overflow-y: auto">
-          <q-item v-for="item in detalhe?.items || []" :key="item.id">
-            <q-item-section>
-              <q-item-label>{{ item.product_name }}</q-item-label>
-              <!-- O que o promotor digitou, antes da conversão em unidades -->
-              <q-item-label caption>
-                {{ digitado(item) }}
-                <span v-if="item.expires_at"> · validade {{ formatDia(item.expires_at) }}</span>
-                <span v-if="item.notes"> · {{ item.notes }}</span>
-              </q-item-label>
-            </q-item-section>
-            <q-item-section side class="text-weight-bold text-primary">
-              {{ formatQtd(item.quantity) }} un
-            </q-item-section>
-          </q-item>
-        </q-list>
+        <div v-if="detalhe?.carregando" class="text-center q-pa-lg">
+          <q-spinner color="primary" size="2em" />
+        </div>
+
+        <div v-else style="max-height: 60vh; overflow-y: auto">
+          <template v-for="lado in ['gondola', 'estoque']" :key="lado">
+            <q-card-section v-if="detalhe?.[lado]" class="q-pb-xs">
+              <q-chip dense square outline
+                      :color="lado === 'gondola' ? 'primary' : 'teal-8'"
+                      :icon="lado === 'gondola' ? 'shelves' : 'inventory_2'">
+                {{ rotuloTipo(lado) }}
+              </q-chip>
+              <span class="text-caption text-grey-7">
+                {{ formatData(detalhe[lado].visited_at) }}
+              </span>
+
+              <q-banner v-if="detalhe[lado].no_products" dense
+                        class="bg-grey-2 rounded-borders q-mt-sm">
+                <template #avatar><q-icon name="do_not_disturb_on" color="grey-7" /></template>
+                O promotor informou que não havia nenhum produto
+                {{ lado === 'gondola' ? 'na gôndola' : 'no estoque' }}.
+              </q-banner>
+
+              <q-banner v-if="detalhe[lado].notes" dense
+                        class="bg-grey-2 rounded-borders q-mt-sm">
+                {{ detalhe[lado].notes }}
+              </q-banner>
+            </q-card-section>
+
+            <q-list v-if="detalhe?.[lado]?.items?.length" separator>
+              <q-item v-for="item in detalhe[lado].items" :key="item.id">
+                <q-item-section>
+                  <q-item-label>{{ item.product_name }}</q-item-label>
+                  <!-- O que o promotor digitou, antes da conversão em unidades -->
+                  <q-item-label caption>
+                    {{ digitado(item) }}
+                    <span v-if="item.expires_at"> · validade {{ formatDia(item.expires_at) }}</span>
+                    <span v-if="item.notes"> · {{ item.notes }}</span>
+                  </q-item-label>
+                </q-item-section>
+                <q-item-section side class="text-weight-bold text-primary">
+                  {{ formatQtd(item.quantity) }} un
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </template>
+        </div>
       </q-card>
     </q-dialog>
   </q-page>
@@ -216,13 +220,13 @@ const detalheAberto = ref(false)
 const detalhe = ref(null)
 
 const filtros = reactive({
-  date_from: '', date_to: '', promoter_id: null, visit_type: null, status: null,
+  date_from: '', date_to: '', promoter_id: null, status: null,
 })
 const paginacao = ref({ page: 1, rowsPerPage: 25, rowsNumber: 0 })
 
-const tiposContagem = [
-  { value: 'gondola', label: 'Gôndola' },
-  { value: 'estoque', label: 'Estoque' },
+const statusOpcoes = [
+  { value: 'submitted', label: 'Nova' },
+  { value: 'exported', label: 'Processada' },
 ]
 
 const formatData = (v) => (v ? new Date(v).toLocaleString('pt-BR') : '—')
@@ -243,8 +247,8 @@ const colunas = [
     format: (v) => (v ? new Date(v).toLocaleString('pt-BR') : '—') },
   { name: 'customer_name', label: 'Cliente', field: 'customer_name', align: 'left' },
   { name: 'promoter_name', label: 'Promotor', field: 'promoter_name', align: 'left' },
-  { name: 'visit_type', label: 'Contagem', field: 'visit_type', align: 'left' },
-  { name: 'items_count', label: 'Itens', field: 'items_count', align: 'right' },
+  { name: 'gondola', label: 'Gôndola', field: 'gondola', align: 'right' },
+  { name: 'estoque', label: 'Estoque', field: 'estoque', align: 'right' },
   { name: 'missing_side', label: 'Par', field: 'missing_side', align: 'left' },
   { name: 'status', label: 'Status', field: 'status', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
@@ -256,7 +260,7 @@ async function carregar(props) {
 
   carregando.value = true
   try {
-    const { items, total } = await merchandisingApi.visits({
+    const { items, total } = await merchandisingApi.visitPairs({
       ...filtros, limit: rows, offset: (page - 1) * rows,
     })
     visitas.value = items
@@ -275,20 +279,37 @@ async function carregar(props) {
 const recarregar = () =>
   carregar({ pagination: { page: 1, rowsPerPage: paginacao.value.rowsPerPage } })
 
-async function abrirDetalhe(id) {
-  detalhe.value = await merchandisingApi.visit(id)
+/** Os itens dos dois lados, buscados em paralelo: a linha da tela traz só as
+ *  contagens, e o detalhe é a única tela que precisa dos produtos. */
+async function abrirDetalhe(linha) {
+  detalhe.value = { linha, gondola: null, estoque: null, carregando: true }
   detalheAberto.value = true
+  try {
+    const [gondola, estoque] = await Promise.all([
+      linha.gondola ? merchandisingApi.visit(linha.gondola.visit_id) : null,
+      linha.estoque ? merchandisingApi.visit(linha.estoque.visit_id) : null,
+    ])
+    detalhe.value = { linha, gondola, estoque, carregando: false }
+  } catch (error) {
+    detalheAberto.value = false
+    $q.notify({
+      type: 'negative',
+      message: error.response?.data?.detail || 'Erro ao abrir a contagem',
+    })
+  }
 }
 
-async function exportarUma(id) {
+/** A planilha é sempre a do par — qualquer um dos dois lados serve de entrada,
+ *  o servidor reencontra o outro sozinho. */
+async function exportarUma(linha) {
   try {
-    await merchandisingApi.exportVisit(id)
+    await merchandisingApi.exportVisit(linha.gondola?.visit_id || linha.estoque?.visit_id)
   } catch (error) {
     // Par incompleto: o servidor diz qual lado falta
     $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
     return
   }
-  // O download marca as contagens do par como processadas — recarrega o status
+  // O download marca as duas contagens como processadas — recarrega o status
   await carregar()
 }
 

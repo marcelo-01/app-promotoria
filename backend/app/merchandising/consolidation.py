@@ -24,7 +24,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from app.core.config import settings
-from app.infrastructure.persistence.models.stock_visit import VisitType
+from app.infrastructure.persistence.models.stock_visit import StockVisitStatus, VisitType
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +33,9 @@ ESTOQUE = VisitType.ESTOQUE.value
 SIDES = (GONDOLA, ESTOQUE)
 
 SIDE_LABEL = {GONDOLA: "gôndola", ESTOQUE: "estoque"}
+
+SUBMITTED = StockVisitStatus.SUBMITTED.value
+EXPORTED = StockVisitStatus.EXPORTED.value
 
 
 # ─── Dia local ────────────────────────────────────────────────────────────────
@@ -149,6 +152,14 @@ class Pair:
         return faltando[0] if len(faltando) == 1 else None
 
     @property
+    def status(self) -> str:
+        """O status do par, que é o do lado mais atrasado: só está "exportado"
+        quando as duas contagens já viraram planilha. Meia visita processada
+        continua pendente para quem lê a tela."""
+        lados = self.sides.values()
+        return EXPORTED if lados and all(v.status == EXPORTED for v in lados) else SUBMITTED
+
+    @property
     def moment(self) -> Optional[datetime]:
         """A primeira das duas contagens do dia — é a data que vai na planilha."""
         datas = [
@@ -178,6 +189,13 @@ def group_visits(visits: Iterable) -> dict[GroupKey, Pair]:
             par.sides[visit.visit_type] = visit
 
     return pares
+
+
+def sort_recent_first(pairs: Iterable[Pair]) -> list[Pair]:
+    """Pares do mais recente para o mais antigo — a ordem da tela do
+    administrador, a mesma que a lista por visita tinha antes."""
+    fundo = datetime.min.replace(tzinfo=timezone.utc)
+    return sorted(pairs, key=lambda par: par.moment or fundo, reverse=True)
 
 
 def missing_side_by_visit(visits: Iterable) -> dict[UUID, Optional[str]]:

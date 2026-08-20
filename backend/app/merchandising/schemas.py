@@ -176,6 +176,52 @@ class StockVisitListResponse(BaseModel):
     offset: int
 
 
+# ─── O par gôndola + estoque, como o administrador vê ─────────────────────────
+
+
+class VisitPairSideResponse(BaseModel):
+    """Um dos dois lados do par: a contagem de gôndola ou a de estoque."""
+
+    visit_id: UUID
+    status: str
+    no_products: bool = False
+    items_count: int = 0
+    visited_at: Optional[datetime] = None
+
+
+class VisitPairResponse(BaseModel):
+    """As duas contagens de um cliente num dia, na linha única da tela do
+    administrador.
+
+    O promotor conta os dois lugares separadamente — são duas visitas no banco.
+    Quem administra não vê duas: vê a visita do dia, com os dois números lado a
+    lado, exatamente como a planilha entrega. O lado que ainda não chegou vem
+    como None, e é ele que `missing_side` nomeia.
+    """
+
+    # 'cliente|promotor|dia' — a mesma chave que forma o par, e o que identifica
+    # a linha na tela. Não existe no banco: nasce do agrupamento.
+    id: str
+    customer_id: UUID
+    customer_name: Optional[str] = None
+    promoter_id: UUID
+    promoter_name: Optional[str] = None
+    day: str
+    # A primeira das duas contagens — a hora em que o promotor chegou na loja.
+    visited_at: Optional[datetime] = None
+    gondola: Optional[VisitPairSideResponse] = None
+    estoque: Optional[VisitPairSideResponse] = None
+    missing_side: Optional[str] = None
+    status: str
+
+
+class VisitPairListResponse(BaseModel):
+    items: List[VisitPairResponse]
+    total: int
+    limit: int
+    offset: int
+
+
 # ─── Administração ────────────────────────────────────────────────────────────
 
 

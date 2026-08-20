@@ -18,12 +18,46 @@ from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     CountProductResponse, CountSheetResponse, PromoterCustomerResponse,
     StockVisitCreate, StockVisitItemInput, StockVisitItemResponse, StockVisitResponse,
-    StockVisitUpdate,
+    StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
 )
 
 
 def _is_admin(user: User) -> bool:
     return user.role in (UserRole.ADMIN, UserRole.SUPERVISOR)
+
+
+def _side_response(visit) -> VisitPairSideResponse:
+    return VisitPairSideResponse(
+        visit_id=visit.id,
+        status=visit.status,
+        no_products=bool(visit.no_products),
+        items_count=visit.items_count,
+        visited_at=visit.visited_at,
+    )
+
+
+def _pair_response(par: consolidation.Pair) -> VisitPairResponse:
+    """Par → a linha única da tela do administrador."""
+    gondola = par.side(consolidation.GONDOLA)
+    estoque = par.side(consolidation.ESTOQUE)
+    # Cliente e promotor são os mesmos nos dois lados (é o que define o par),
+    # então qualquer lado presente serve para nomear a linha.
+    qualquer = gondola or estoque
+    customer_id, promoter_id, dia = par.key
+
+    return VisitPairResponse(
+        id=f"{customer_id}|{promoter_id}|{dia}",
+        customer_id=customer_id,
+        customer_name=qualquer.customer_name,
+        promoter_id=promoter_id,
+        promoter_name=qualquer.promoter_name,
+        day=dia,
+        visited_at=par.moment,
+        gondola=_side_response(gondola) if gondola else None,
+        estoque=_side_response(estoque) if estoque else None,
+        missing_side=par.missing,
+        status=par.status,
+    )
 
 
 class MerchandisingService:
@@ -344,6 +378,49 @@ class MerchandisingService:
             for v, c_name, p_name, count in rows
         ]
         return visits, total
+
+    @staticmethod
+    async def list_visit_pairs(
+        session: AsyncSession, tenant_id: UUID,
+        promoter_id: Optional[UUID] = None, customer_id: Optional[UUID] = None,
+        status: Optional[str] = None,
+        date_from: Optional[datetime] = None, date_to: Optional[datetime] = None,
+        limit: int = 50, offset: int = 0,
+    ) -> tuple[list[VisitPairResponse], int]:
+        """A lista do administrador: uma linha por cliente/promotor/dia.
+
+        O promotor conta gôndola e estoque separadamente — são duas visitas no
+        banco, e continuam sendo. Mas quem administra recebe uma planilha só, com
+        os dois lugares lado a lado, e via duas linhas na tela para a mesma ida à
+        loja. Agora a tela conta a mesma história que a planilha.
+
+        A paginação é feita aqui, sobre os pares, e não no SQL sobre as visitas.
+        Não é preguiça: o par se forma pelo DIA LOCAL, que só existe em Python
+        (`consolidation.local_day`), e um LIMIT aplicado às visitas partiria pares
+        ao meio — a gôndola no fim de uma página, o estoque no começo da outra,
+        as duas metades marcadas como incompletas.
+
+        Como na planilha, a janela consultada é um dia maior de cada lado e o
+        recorte final é por dia local: é isso que faz "até 19/08" incluir a
+        contagem das 21h do dia 19, que em UTC já é dia 20.
+        """
+        visitas = await Repo.list_visits_for_pairing(
+            session, tenant_id,
+            customer_ids=[customer_id] if customer_id else None,
+            promoter_ids=[promoter_id] if promoter_id else None,
+            date_from=date_from - timedelta(days=1) if date_from else None,
+            date_to=date_to + timedelta(days=1) if date_to else None,
+        )
+
+        primeiro, ultimo = consolidation.day_bounds(date_from, date_to)
+        pares = [
+            par for par in consolidation.group_visits(visitas).values()
+            if consolidation.within_days(par, primeiro, ultimo)
+            and (not status or par.status == status)
+        ]
+
+        pagina = consolidation.sort_recent_first(pares)[offset : offset + limit]
+        return [_pair_response(par) for par in pagina], len(pares)
 
     # ── O par gôndola + estoque ───────────────────────────────────────────
 

@@ -61,8 +61,12 @@ export const merchandisingApi = {
   },
 
   // ── Administrador ─────────────────────────────────────────────────────
-  async visits(params = {}) {
-    const { data } = await apiClient.get('/merchandising/visits', {
+
+  /** A lista do administrador: uma linha por ida à loja, com gôndola e estoque
+   *  juntos — a mesma unidade que a planilha usa. `visit_type` não entra: a
+   *  linha é sempre dos dois lugares. */
+  async visitPairs(params = {}) {
+    const { data } = await apiClient.get('/merchandising/visit-pairs', {
       params: normalizeParams(params),
     })
     return data

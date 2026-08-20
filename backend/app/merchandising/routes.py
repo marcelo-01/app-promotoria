@@ -13,6 +13,7 @@ from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, PromoterCustomerResponse,
     StockVisitCreate, StockVisitListResponse, StockVisitResponse, StockVisitUpdate,
+    VisitPairListResponse,
 )
 from app.merchandising.service import MerchandisingService
 
@@ -129,12 +130,11 @@ async def list_my_visits(
 
 # ─── Administrador: visitas e planilhas ───────────────────────────────────────
 
-@router.get("/visits", response_model=StockVisitListResponse)
-async def list_visits(
+@router.get("/visit-pairs", response_model=VisitPairListResponse)
+async def list_visit_pairs(
     promoter_id: Optional[UUID] = None,
     customer_id: Optional[UUID] = None,
     status_filter: Optional[str] = Query(None, alias="status"),
-    visit_type: Optional[str] = None,
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
     limit: int = Query(50, ge=1, le=200),
@@ -142,13 +142,19 @@ async def list_visits(
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
-    items, total = await MerchandisingService.list_visits(
+    """A ida do promotor à loja, numa linha só: gôndola e estoque lado a lado.
+
+    Sem filtro por tipo de contagem, pelo mesmo motivo da planilha — a linha é
+    sempre dos dois lugares. Filtrar por um lado só devolveria meias visitas,
+    que é justamente o que esta tela deixou de mostrar.
+    """
+    items, total = await MerchandisingService.list_visit_pairs(
         session, context["tenant_id"],
         promoter_id=promoter_id, customer_id=customer_id, status=status_filter,
-        visit_type=visit_type, date_from=date_from, date_to=date_to,
+        date_from=date_from, date_to=date_to,
         limit=limit, offset=offset,
     )
-    return StockVisitListResponse(items=items, total=total, limit=limit, offset=offset)
+    return VisitPairListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/visits/{visit_id}/export.xlsx")
