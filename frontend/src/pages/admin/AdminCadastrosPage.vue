@@ -189,6 +189,16 @@
             <template #prepend><q-icon name="inventory_2" /></template>
           </q-input>
 
+          <q-input
+            v-model="produtoForm.shelf_life_days" outlined dense clearable
+            type="number" min="1" step="1" label="Dias de validade"
+            hint="Quantos dias o produto dura a partir da fabricação.
+                  Deixe em branco enquanto não souber."
+          >
+            <template #prepend><q-icon name="event" /></template>
+            <template #append><span class="text-caption text-grey-7">dias</span></template>
+          </q-input>
+
           <div class="row items-center q-col-gutter-md">
             <div class="col-auto">
               <q-avatar rounded size="96px" color="grey-3">
@@ -345,7 +355,9 @@ const buscaProduto = ref('')
 const carregandoProdutos = ref(false)
 const dialogProduto = ref(false)
 
-const produtoForm = reactive({ id: null, name: '', package_size: 1, image_url: null })
+const produtoForm = reactive({
+  id: null, name: '', package_size: 1, shelf_life_days: null, image_url: null,
+})
 const fotoArquivo = ref(null)
 const fotoPreview = ref(null)
 // A prévia é um object URL: sem revogar, o navegador segura o arquivo na memória
@@ -356,6 +368,8 @@ const colunasProduto = [
   { name: 'name', label: 'Produto', field: 'name', align: 'left', sortable: true },
   { name: 'package_size', label: 'Un. por caixa', field: 'package_size', align: 'right',
     sortable: true, format: (v) => formatQtd(v) },
+  { name: 'shelf_life_days', label: 'Validade', field: 'shelf_life_days', align: 'right',
+    sortable: true, format: (v) => (v == null ? '—' : `${v} dias`) },
   { name: 'is_active', label: 'Situação', field: 'is_active', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
@@ -382,6 +396,7 @@ function abrirProduto(row) {
     id: row?.id || null,
     name: row?.name || '',
     package_size: Number(row?.package_size) || 1,
+    shelf_life_days: row?.shelf_life_days ?? null,
     image_url: row?.image_url || null,
   })
   fotoArquivo.value = null
@@ -426,12 +441,24 @@ async function salvarProduto() {
     })
     return
   }
+  // Validade é opcional: em branco (o clearable devolve null) vai como null e
+  // apaga o que estava lá. Preenchida, tem de ser um inteiro de dias.
+  const validade = produtoForm.shelf_life_days
+  const semValidade = validade === null || validade === undefined || validade === ''
+  if (!semValidade && !(Number.isInteger(Number(validade)) && Number(validade) > 0)) {
+    $q.notify({
+      type: 'warning',
+      message: 'Dias de validade deve ser um número inteiro de dias, maior que zero.',
+    })
+    return
+  }
   salvando.value = true
   try {
     // A foto vai numa segunda chamada (multipart): produto novo só ganha id aqui.
     const payload = {
       name: produtoForm.name,
       package_size: Number(produtoForm.package_size),
+      shelf_life_days: semValidade ? null : Number(validade),
     }
     const salvo = produtoForm.id
       ? await productsApi.update(produtoForm.id, payload)

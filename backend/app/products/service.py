@@ -12,6 +12,11 @@ from app.products.repository import ProductsRepository as Repo
 from app.products.schemas import ProductCreate, ProductUpdate
 
 
+# Campos que podem voltar a ficar em branco: mandar `null` neles apaga o valor,
+# em vez de ser lido como "não mexi neste campo".
+_APAGAVEIS = {"shelf_life_days"}
+
+
 class ProductsService:
 
     @staticmethod
@@ -41,6 +46,7 @@ class ProductsService:
             tenant_id=tenant_id,
             name=payload.name,
             package_size=payload.package_size,
+            shelf_life_days=payload.shelf_life_days,
         )
         return await Repo.save(session, product)
 
@@ -51,7 +57,7 @@ class ProductsService:
         product = await ProductsService.get(session, tenant_id, product_id)
 
         for key, value in payload.model_dump(exclude_unset=True).items():
-            if value is not None:
+            if value is not None or key in _APAGAVEIS:
                 setattr(product, key, value)
 
         return await Repo.save(session, product)
