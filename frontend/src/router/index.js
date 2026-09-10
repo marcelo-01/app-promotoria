@@ -46,7 +46,12 @@ export const adminRoutes = [
     component: () => import('@/layouts/AdminLayout.vue'),
     meta: { requiresAuth: true, requiresRoles: ['admin', 'supervisor'] },
     children: [
-      { path: '', redirect: { name: 'AdminVisitas' } },
+      { path: '', redirect: { name: 'AdminDashboard' } },
+      {
+        path: 'painel',
+        name: 'AdminDashboard',
+        component: () => import('@/pages/admin/AdminDashboardPage.vue'),
+      },
       {
         path: 'visitas',
         name: 'AdminVisitas',

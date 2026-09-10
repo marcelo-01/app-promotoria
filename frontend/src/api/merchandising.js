@@ -62,6 +62,16 @@ export const merchandisingApi = {
 
   // ── Administrador ─────────────────────────────────────────────────────
 
+  /** Os dois painéis da tela inicial: cobertura do dia e visitas pela metade.
+   *  `day` é o dia local a medir; `stuck_days`, o quanto a lista de travadas
+   *  olha para trás — ela conta sempre a partir de hoje, não de `day`. */
+  async dashboard(params = {}) {
+    const { data } = await apiClient.get('/merchandising/dashboard', {
+      params: normalizeParams(params),
+    })
+    return data
+  },
+
   /** A lista do administrador: uma linha por ida à loja, com gôndola e estoque
    *  juntos — a mesma unidade que a planilha usa. `visit_type` não entra: a
    *  linha é sempre dos dois lugares. */

@@ -472,6 +472,44 @@ class MerchandisingRepository:
         await session.commit()
 
     @staticmethod
+    async def list_active_assignments(session: AsyncSession, tenant_id: UUID) -> Sequence:
+        """A carteira inteira: cada par promotor + cliente que está valendo hoje.
+
+        É o denominador da cobertura do painel. Sem ele não existe "18 de 23",
+        só "18" — e "18" não diz se o dia foi bom.
+
+        Vínculo desligado, promotor inativo e cliente inativo ficam de fora: são
+        lojas que ninguém deveria visitar, e mantê-las no denominador faria a
+        cobertura cair todo dia por um motivo que não é de campo.
+        """
+        query = (
+            select(
+                PromoterCustomer.user_id.label("promoter_id"),
+                User.full_name.label("promoter_name"),
+                PromoterCustomer.customer_id.label("customer_id"),
+                Customer.name.label("customer_name"),
+            )
+            .select_from(PromoterCustomer)
+            .join(
+                User,
+                and_(User.id == PromoterCustomer.user_id, User.is_active.is_(True)),
+            )
+            .join(
+                Customer,
+                and_(
+                    Customer.id == PromoterCustomer.customer_id,
+                    Customer.status == CustomerStatus.ACTIVE,
+                ),
+            )
+            .where(
+                PromoterCustomer.tenant_id == tenant_id,
+                PromoterCustomer.is_active.is_(True),
+            )
+            .order_by(User.full_name, Customer.name)
+        )
+        return (await session.execute(query)).all()
+
+    @staticmethod
     async def list_assigned_customer_ids(
         session: AsyncSession, tenant_id: UUID, user_id: UUID
     ) -> list[UUID]:

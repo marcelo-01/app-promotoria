@@ -233,3 +233,64 @@ class AssignmentUpdate(BaseModel):
 class CustomerMixUpdate(BaseModel):
     """Define o mix de produtos contados em um cliente, na ordem informada."""
     product_ids: List[UUID]
+
+
+# ─── Painel do administrador ──────────────────────────────────────────────────
+
+
+class CoverageResponse(BaseModel):
+    """Quantas lojas de uma carteira fecharam o dia.
+
+    `closed` é a loja com as duas contagens — a única que vira planilha. Somar
+    `partial` a ela mostraria um dia melhor do que o que o administrador
+    consegue exportar.
+    """
+
+    customers_total: int = 0
+    closed: int = 0
+    partial: int = 0
+    missing: int = 0
+
+
+class PromoterCoverageResponse(CoverageResponse):
+    promoter_id: UUID
+    promoter_name: Optional[str] = None
+
+
+class DashboardCoverageResponse(CoverageResponse):
+    # Cada promotor contra a própria carteira. A soma das linhas pode passar do
+    # total: loja atendida por dois promotores conta nas duas carteiras, e uma
+    # vez só no total.
+    by_promoter: List[PromoterCoverageResponse] = []
+
+
+class StuckPairResponse(BaseModel):
+    """Uma visita pela metade: chegou um lado, o outro não."""
+
+    customer_id: UUID
+    customer_name: Optional[str] = None
+    promoter_id: UUID
+    promoter_name: Optional[str] = None
+    day: str
+    # Dias entre o dia da contagem e hoje. Zero é meia visita de hoje, que ainda
+    # pode ser o promotor dentro da loja.
+    days_waiting: int = 0
+    missing_side: str
+    # A contagem que chegou — é ela que a tela abre ao clicar na linha.
+    visit_id: UUID
+
+
+class DashboardStuckResponse(BaseModel):
+    window_days: int
+    total: int
+    # Quantas passaram do próprio dia: as que não se fecham mais sozinhas.
+    overdue: int = 0
+    items: List[StuckPairResponse] = []
+
+
+class DashboardResponse(BaseModel):
+    """Os dois painéis da tela inicial do administrador, numa chamada só."""
+
+    day: str
+    coverage: DashboardCoverageResponse
+    stuck: DashboardStuckResponse

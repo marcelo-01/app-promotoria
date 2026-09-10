@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from dataclasses import asdict
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 from uuid import UUID, uuid4
@@ -13,12 +14,14 @@ from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
-from app.merchandising import consolidation
+from app.merchandising import consolidation, dashboard
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    CountProductResponse, CountSheetResponse, PromoterCustomerResponse,
-    StockVisitCreate, StockVisitItemInput, StockVisitItemResponse, StockVisitResponse,
-    StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
+    CountProductResponse, CountSheetResponse, DashboardCoverageResponse,
+    DashboardResponse, DashboardStuckResponse, PromoterCoverageResponse,
+    PromoterCustomerResponse, StockVisitCreate, StockVisitItemInput,
+    StockVisitItemResponse, StockVisitResponse, StockVisitUpdate, StuckPairResponse,
+    VisitPairResponse, VisitPairSideResponse,
 )
 
 
@@ -421,6 +424,75 @@ class MerchandisingService:
 
         pagina = consolidation.sort_recent_first(pares)[offset : offset + limit]
         return [_pair_response(par) for par in pagina], len(pares)
+
+    # ── Painel do administrador ───────────────────────────────────────────
+
+    @staticmethod
+    async def admin_dashboard(
+        session: AsyncSession, tenant_id: UUID,
+        day: Optional[date] = None, stuck_days: int = 30, stuck_limit: int = 20,
+    ) -> DashboardResponse:
+        """Cobertura do dia e visitas pela metade, numa chamada só.
+
+        São duas leituras porque as janelas são diferentes de propósito. A
+        cobertura é de UM dia: quantas lojas da carteira fecharam a visita
+        naquela data. A lista de travadas olha para trás, e a partir de HOJE —
+        trocar a data da cobertura para conferir a terça-feira passada não pode
+        esconder o que está parado agora.
+        """
+        hoje = consolidation.local_day(datetime.now(timezone.utc))
+        dia = day.strftime("%Y-%m-%d") if day else hoje
+
+        # Só as contagens daquele dia local. `day_window` devolve os dois
+        # instantes UTC que o delimitam — o mesmo recorte que a planilha usa.
+        inicio, fim = consolidation.day_window(dia)
+        pares_do_dia = consolidation.group_visits(
+            await Repo.list_visits_for_pairing(
+                session, tenant_id, date_from=inicio, date_to=fim
+            )
+        ).values()
+
+        carteira = await Repo.list_active_assignments(session, tenant_id)
+        geral = dashboard.coverage(carteira, pares_do_dia)
+
+        # A janela das travadas é sempre ancorada em hoje, e não em `dia`: o
+        # fim dela é o fim do dia de hoje, o que também descarta contagem com
+        # data no futuro — celular com relógio errado não inventa pendência.
+        desde, _ = consolidation.day_window(
+            (date.fromisoformat(hoje) - timedelta(days=stuck_days - 1)).isoformat()
+        )
+        _, ate = consolidation.day_window(hoje)
+        travadas = dashboard.stuck_pairs(
+            consolidation.group_visits(
+                await Repo.list_visits_for_pairing(
+                    session, tenant_id, date_from=desde, date_to=ate
+                )
+            ).values(),
+            hoje,
+        )
+
+        return DashboardResponse(
+            day=dia,
+            coverage=DashboardCoverageResponse(
+                **asdict(geral),
+                by_promoter=[
+                    PromoterCoverageResponse(
+                        promoter_id=linha.promoter_id,
+                        promoter_name=linha.promoter_name,
+                        **asdict(linha.coverage),
+                    )
+                    for linha in dashboard.coverage_by_promoter(carteira, pares_do_dia)
+                ],
+            ),
+            stuck=DashboardStuckResponse(
+                window_days=stuck_days,
+                total=len(travadas),
+                overdue=dashboard.overdue(travadas),
+                items=[
+                    StuckPairResponse(**asdict(linha)) for linha in travadas[:stuck_limit]
+                ],
+            ),
+        )
 
     # ── O par gôndola + estoque ───────────────────────────────────────────
 
