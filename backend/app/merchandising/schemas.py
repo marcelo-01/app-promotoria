@@ -235,62 +235,93 @@ class CustomerMixUpdate(BaseModel):
     product_ids: List[UUID]
 
 
-# ─── Painel do administrador ──────────────────────────────────────────────────
+
+# ─── Evolução do estoque do cliente ───────────────────────────────────────────
+#
+# Tudo aqui é variação ENTRE CONTAGENS, nunca venda: este app não conhece
+# entregas nem pedidos, então o que subiu quer dizer "houve entrega de pelo
+# menos isso" e o que caiu, "saiu pelo menos isso". Ver `evolution.py`.
 
 
-class CoverageResponse(BaseModel):
-    """Quantas lojas de uma carteira fecharam o dia.
-
-    `closed` é a loja com as duas contagens — a única que vira planilha. Somar
-    `partial` a ela mostraria um dia melhor do que o que o administrador
-    consegue exportar.
-    """
-
-    customers_total: int = 0
-    closed: int = 0
-    partial: int = 0
-    missing: int = 0
-
-
-class PromoterCoverageResponse(CoverageResponse):
-    promoter_id: UUID
-    promoter_name: Optional[str] = None
-
-
-class DashboardCoverageResponse(CoverageResponse):
-    # Cada promotor contra a própria carteira. A soma das linhas pode passar do
-    # total: loja atendida por dois promotores conta nas duas carteiras, e uma
-    # vez só no total.
-    by_promoter: List[PromoterCoverageResponse] = []
-
-
-class StuckPairResponse(BaseModel):
-    """Uma visita pela metade: chegou um lado, o outro não."""
+class StockCustomerResponse(BaseModel):
+    """Um cliente com contagem na janela, e quanta história ele tem."""
 
     customer_id: UUID
     customer_name: Optional[str] = None
-    promoter_id: UUID
-    promoter_name: Optional[str] = None
+    # Contagens com os dois lados no mesmo dia — as únicas que comparam.
+    complete_counts: int = 0
+    first_day: str = ""
+    last_day: str = ""
+
+
+class StalledProductResponse(BaseModel):
+    """Produto encalhado: mesma quantidade em contagens seguidas."""
+
+    customer_id: UUID
+    customer_name: Optional[str] = None
+    product_id: UUID
+    product_name: Optional[str] = None
+    quantity: float = 0
+    counts: int = 0
+    days: int = 0
+    since: str = ""
+
+
+class MovedProductResponse(BaseModel):
+    """Produto que zerou entre duas contagens, ou que voltou depois de zerado."""
+
+    customer_id: UUID
+    customer_name: Optional[str] = None
+    product_id: UUID
+    product_name: Optional[str] = None
     day: str
-    # Dias entre o dia da contagem e hoje. Zero é meia visita de hoje, que ainda
-    # pode ser o promotor dentro da loja.
-    days_waiting: int = 0
-    missing_side: str
-    # A contagem que chegou — é ela que a tela abre ao clicar na linha.
-    visit_id: UUID
+    previous_day: str
+    previous: float = 0
+    current: float = 0
+    days: int = 0
 
 
-class DashboardStuckResponse(BaseModel):
+class ShelfGapResponse(BaseModel):
+    """Gôndola zerada com saldo no estoque — reposição, não falta de produto."""
+
+    customer_id: UUID
+    customer_name: Optional[str] = None
+    product_id: UUID
+    product_name: Optional[str] = None
+    day: str
+    estoque: float = 0
+    repeated: bool = False
+
+
+class StockInsightsResponse(BaseModel):
     window_days: int
-    total: int
-    # Quantas passaram do próprio dia: as que não se fecham mais sozinhas.
-    overdue: int = 0
-    items: List[StuckPairResponse] = []
+    from_day: str
+    to_day: str
+    customers: List[StockCustomerResponse] = []
+    stalled: List[StalledProductResponse] = []
+    gone: List[MovedProductResponse] = []
+    returned: List[MovedProductResponse] = []
+    shelf_gap: List[ShelfGapResponse] = []
+    # Totais antes do corte por `limit`, para a tela dizer "20 de 63".
+    stalled_total: int = 0
+    gone_total: int = 0
+    returned_total: int = 0
+    shelf_gap_total: int = 0
 
 
-class DashboardResponse(BaseModel):
-    """Os dois painéis da tela inicial do administrador, numa chamada só."""
+class StockPointResponse(BaseModel):
+    """Um dia contado. Lado não contado vem como None: fica sem ponto no
+    gráfico, em vez de virar um zero que não foi medido."""
 
     day: str
-    coverage: DashboardCoverageResponse
-    stuck: DashboardStuckResponse
+    gondola: Optional[float] = None
+    estoque: Optional[float] = None
+
+
+class StockHistoryResponse(BaseModel):
+    customer_id: UUID
+    customer_name: Optional[str] = None
+    product_id: Optional[UUID] = None
+    product_name: Optional[str] = None
+    window_days: int
+    points: List[StockPointResponse] = []

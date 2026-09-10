@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Optional
 from uuid import UUID
 
@@ -11,9 +11,9 @@ from app.infrastructure.persistence.session import get_db_session
 from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, DashboardResponse,
-    PromoterCustomerResponse, StockVisitCreate, StockVisitListResponse,
-    StockVisitResponse, StockVisitUpdate, VisitPairListResponse,
+    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, PromoterCustomerResponse,
+    StockHistoryResponse, StockInsightsResponse, StockVisitCreate,
+    StockVisitListResponse, StockVisitResponse, StockVisitUpdate, VisitPairListResponse,
 )
 from app.merchandising.service import MerchandisingService
 
@@ -128,26 +128,44 @@ async def list_my_visits(
     return StockVisitListResponse(items=items, total=total, limit=limit, offset=offset)
 
 
-# ─── Administrador: painel ────────────────────────────────────────────────────
+# ─── Administrador: evolução do estoque ───────────────────────────────────────
 
 
-@router.get("/dashboard", response_model=DashboardResponse)
-async def get_dashboard(
-    day: Optional[date] = None,
-    stuck_days: int = Query(30, ge=1, le=365),
-    stuck_limit: int = Query(20, ge=1, le=200),
+@router.get("/stock-insights", response_model=StockInsightsResponse)
+async def get_stock_insights(
+    days: int = Query(90, ge=7, le=730),
+    limit: int = Query(20, ge=1, le=200),
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
-    """A tela inicial do administrador: cobertura do dia e visitas pela metade.
+    """O que mudou no estoque dos clientes: parados, sumidos, voltados, e
+    gôndola vazia com saldo no depósito.
 
-    `day` é o dia local a medir (hoje, se omitido). `stuck_days` é o quanto a
-    lista de travadas olha para trás — ela é sempre contada a partir de hoje,
-    independentemente de `day`.
+    Tudo é variação ENTRE CONTAGENS, nunca venda — o app não conhece entregas.
+    As comparações usam só os dias com gôndola e estoque contados, pela mesma
+    razão da planilha: meia contagem faria todo produto guardado no depósito
+    parecer que sumiu.
     """
-    return await MerchandisingService.admin_dashboard(
-        session, context["tenant_id"],
-        day=day, stuck_days=stuck_days, stuck_limit=stuck_limit,
+    return await MerchandisingService.stock_insights(
+        session, context["tenant_id"], days=days, limit=limit
+    )
+
+
+@router.get("/stock-history", response_model=StockHistoryResponse)
+async def get_stock_history(
+    customer_id: UUID,
+    product_id: Optional[UUID] = None,
+    days: int = Query(90, ge=7, le=730),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    """A linha do tempo de um cliente — da loja inteira, ou de um produto.
+
+    Um ponto por contagem, na data em que ela foi feita. Dia sem contagem não
+    vira ponto: o espaçamento irregular entre eles é a informação.
+    """
+    return await MerchandisingService.stock_history(
+        session, context["tenant_id"], customer_id, product_id=product_id, days=days
     )
 
 

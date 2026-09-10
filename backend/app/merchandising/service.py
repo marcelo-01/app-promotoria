@@ -14,14 +14,14 @@ from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
-from app.merchandising import consolidation, dashboard
+from app.merchandising import consolidation, evolution
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    CountProductResponse, CountSheetResponse, DashboardCoverageResponse,
-    DashboardResponse, DashboardStuckResponse, PromoterCoverageResponse,
-    PromoterCustomerResponse, StockVisitCreate, StockVisitItemInput,
-    StockVisitItemResponse, StockVisitResponse, StockVisitUpdate, StuckPairResponse,
-    VisitPairResponse, VisitPairSideResponse,
+    CountProductResponse, CountSheetResponse, MovedProductResponse,
+    PromoterCustomerResponse, ShelfGapResponse, StalledProductResponse,
+    StockCustomerResponse, StockHistoryResponse, StockInsightsResponse,
+    StockPointResponse, StockVisitCreate, StockVisitItemInput, StockVisitItemResponse,
+    StockVisitResponse, StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
 )
 
 
@@ -425,73 +425,88 @@ class MerchandisingService:
         pagina = consolidation.sort_recent_first(pares)[offset : offset + limit]
         return [_pair_response(par) for par in pagina], len(pares)
 
-    # ── Painel do administrador ───────────────────────────────────────────
+    # ── Evolução do estoque do cliente ────────────────────────────────────
 
     @staticmethod
-    async def admin_dashboard(
-        session: AsyncSession, tenant_id: UUID,
-        day: Optional[date] = None, stuck_days: int = 30, stuck_limit: int = 20,
-    ) -> DashboardResponse:
-        """Cobertura do dia e visitas pela metade, numa chamada só.
+    async def _stock_series(
+        session: AsyncSession, tenant_id: UUID, days: int,
+        customer_id: Optional[UUID] = None,
+    ) -> tuple[list[evolution.Series], str, str]:
+        """As contagens da janela, já viradas em história por produto.
 
-        São duas leituras porque as janelas são diferentes de propósito. A
-        cobertura é de UM dia: quantas lojas da carteira fecharam a visita
-        naquela data. A lista de travadas olha para trás, e a partir de HOJE —
-        trocar a data da cobertura para conferir a terça-feira passada não pode
-        esconder o que está parado agora.
+        Duas leituras e nenhum SQL novo: as visitas saem da mesma consulta que
+        forma o par da planilha, e os itens da mesma que a alimenta — inclusive
+        o `package_size` de hoje, que é o que mantém a série inteira na mesma
+        unidade mesmo se o cadastro do produto tiver sido corrigido no meio.
         """
         hoje = consolidation.local_day(datetime.now(timezone.utc))
-        dia = day.strftime("%Y-%m-%d") if day else hoje
+        primeiro = (date.fromisoformat(hoje) - timedelta(days=days - 1)).isoformat()
 
-        # Só as contagens daquele dia local. `day_window` devolve os dois
-        # instantes UTC que o delimitam — o mesmo recorte que a planilha usa.
-        inicio, fim = consolidation.day_window(dia)
-        pares_do_dia = consolidation.group_visits(
-            await Repo.list_visits_for_pairing(
-                session, tenant_id, date_from=inicio, date_to=fim
-            )
-        ).values()
-
-        carteira = await Repo.list_active_assignments(session, tenant_id)
-        geral = dashboard.coverage(carteira, pares_do_dia)
-
-        # A janela das travadas é sempre ancorada em hoje, e não em `dia`: o
-        # fim dela é o fim do dia de hoje, o que também descarta contagem com
-        # data no futuro — celular com relógio errado não inventa pendência.
-        desde, _ = consolidation.day_window(
-            (date.fromisoformat(hoje) - timedelta(days=stuck_days - 1)).isoformat()
-        )
+        desde, _ = consolidation.day_window(primeiro)
         _, ate = consolidation.day_window(hoje)
-        travadas = dashboard.stuck_pairs(
-            consolidation.group_visits(
-                await Repo.list_visits_for_pairing(
-                    session, tenant_id, date_from=desde, date_to=ate
-                )
-            ).values(),
-            hoje,
+
+        visitas = await Repo.list_visits_for_pairing(
+            session, tenant_id,
+            customer_ids=[customer_id] if customer_id else None,
+            date_from=desde, date_to=ate,
+        )
+        itens = await Repo.list_export_items(
+            session, tenant_id, [v.id for v in visitas]
+        )
+        return evolution.build_series(visitas, itens), primeiro, hoje
+
+    @staticmethod
+    async def stock_insights(
+        session: AsyncSession, tenant_id: UUID, days: int = 90, limit: int = 20,
+    ) -> StockInsightsResponse:
+        """O que mudou no estoque dos clientes na janela pedida."""
+        series, primeiro, hoje = await MerchandisingService._stock_series(
+            session, tenant_id, days
         )
 
-        return DashboardResponse(
-            day=dia,
-            coverage=DashboardCoverageResponse(
-                **asdict(geral),
-                by_promoter=[
-                    PromoterCoverageResponse(
-                        promoter_id=linha.promoter_id,
-                        promoter_name=linha.promoter_name,
-                        **asdict(linha.coverage),
-                    )
-                    for linha in dashboard.coverage_by_promoter(carteira, pares_do_dia)
-                ],
-            ),
-            stuck=DashboardStuckResponse(
-                window_days=stuck_days,
-                total=len(travadas),
-                overdue=dashboard.overdue(travadas),
-                items=[
-                    StuckPairResponse(**asdict(linha)) for linha in travadas[:stuck_limit]
-                ],
-            ),
+        parados = evolution.stalled(series)
+        sumiram, voltaram = evolution.moved(series)
+        faltas = evolution.shelf_gap(series)
+
+        return StockInsightsResponse(
+            window_days=days,
+            from_day=primeiro,
+            to_day=hoje,
+            customers=[
+                StockCustomerResponse(**asdict(c)) for c in evolution.customers(series)
+            ],
+            stalled=[StalledProductResponse(**asdict(p)) for p in parados[:limit]],
+            gone=[MovedProductResponse(**asdict(m)) for m in sumiram[:limit]],
+            returned=[MovedProductResponse(**asdict(m)) for m in voltaram[:limit]],
+            shelf_gap=[ShelfGapResponse(**asdict(f)) for f in faltas[:limit]],
+            stalled_total=len(parados),
+            gone_total=len(sumiram),
+            returned_total=len(voltaram),
+            shelf_gap_total=len(faltas),
+        )
+
+    @staticmethod
+    async def stock_history(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID,
+        product_id: Optional[UUID] = None, days: int = 90,
+    ) -> StockHistoryResponse:
+        """A linha do tempo de um cliente — de um produto, ou da loja inteira."""
+        series, _, _ = await MerchandisingService._stock_series(
+            session, tenant_id, days, customer_id=customer_id
+        )
+        pontos = evolution.history(series, customer_id, product_id)
+
+        # Nome do produto só existe se ele foi contado ali dentro da janela.
+        do_produto = next(
+            (s for s in series if product_id and s.product_id == product_id), None
+        )
+        return StockHistoryResponse(
+            customer_id=customer_id,
+            customer_name=next((s.customer_name for s in series), None),
+            product_id=product_id,
+            product_name=do_produto.product_name if do_produto else None,
+            window_days=days,
+            points=[StockPointResponse(**asdict(p)) for p in pontos],
         )
 
     # ── O par gôndola + estoque ───────────────────────────────────────────

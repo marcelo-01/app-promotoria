@@ -48,7 +48,7 @@ export const adminRoutes = [
     children: [
       { path: '', redirect: { name: 'AdminDashboard' } },
       {
-        path: 'painel',
+        path: 'evolucao',
         name: 'AdminDashboard',
         component: () => import('@/pages/admin/AdminDashboardPage.vue'),
       },

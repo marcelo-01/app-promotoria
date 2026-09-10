@@ -62,7 +62,7 @@ const drawer = ref(false)
 const dialogSenha = ref(false)
 
 const menu = [
-  { name: 'AdminDashboard', label: 'Painel do dia', icon: 'insights' },
+  { name: 'AdminDashboard', label: 'Evolução do estoque', icon: 'insights' },
   { name: 'AdminVisitas', label: 'Contagens recebidas', icon: 'inventory' },
   { name: 'AdminVinculos', label: 'Clientes por promotor', icon: 'link' },
   { name: 'AdminCadastros', label: 'Cadastros', icon: 'folder_shared' },

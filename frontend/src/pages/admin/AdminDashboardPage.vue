@@ -1,333 +1,600 @@
 <!--
-  Painel do dia — a primeira tela do administrador.
+  Evolução do estoque dos clientes.
 
-  Dois painéis, e nada além disso de propósito:
+  O QUE ESTES NÚMEROS SÃO. Este app não conhece entregas nem pedidos, então a
+  diferença entre duas contagens é líquida, não bruta: o que subiu quer dizer
+  que houve entrega de pelo menos aquilo, e o que caiu, que saiu pelo menos
+  aquilo. Nada aqui se chama "venda", e a tela repete isso onde o número aparece
+  — é a diferença entre um indicador útil e um que induz a decisão errada.
 
-  · COBERTURA responde "o dia está indo bem?" antes de qualquer filtro. O
-    denominador é a carteira (os vínculos promotor → cliente), e "fechada" é a
-    loja com as duas contagens: é essa, e só essa, que vira planilha. Somar meia
-    visita ao número mostraria um dia melhor do que o que dá para exportar.
+  CONTAGEM IRREGULAR. O promotor não passa todo dia. Por isso a linha do tempo
+  anda por contagem e não por dia, sem interpolar: dia sem contagem é dia sem
+  ponto, e o espaçamento desigual entre eles é informação, não defeito. As
+  comparações de total usam só os dias em que gôndola e estoque foram contados —
+  a mesma regra da planilha, e pelo mesmo motivo.
 
-  · VISITAS PELA METADE é a mesma informação que a tela de contagens já traz
-    linha a linha, com o que falta lá: a idade. Meia visita de hoje é o promotor
-    ainda dentro da loja; meia visita de três dias atrás é um telefonema. Por
-    isso esta lista vem da mais velha para a mais nova, e não da mais recente.
-
-  As cores são as mesmas da tela de contagens — verde "completa", laranja
-  "aguardando", cinza "não chegou" — e nunca aparecem sozinhas: todo estado tem
-  ícone e palavra ao lado.
+  O gráfico é SVG escrito à mão, sem biblioteca. Não é bravata: o plano trata
+  cada dependência nova como custo no dia da fusão com o ERP, e uma biblioteca
+  de gráficos aqui obrigaria o ERP a adotá-la junto. São cem linhas.
 -->
 <template>
   <q-page class="q-pa-md">
-    <div class="row items-start justify-between q-mb-md q-col-gutter-sm">
-      <div class="col">
-        <div class="text-h6">Painel do dia</div>
+    <div class="cabecalho q-mb-md">
+      <div class="cabecalho__texto">
+        <div class="text-h6">Evolução do estoque</div>
         <div class="text-caption text-grey-7">
-          Quanto da carteira já fechou a visita, e o que ficou pela metade.
+          O que mudou no estoque dos clientes entre uma contagem e outra.
         </div>
       </div>
-      <div class="col-12 col-sm-auto row items-center q-gutter-sm">
-        <q-input
-          v-model="dia" outlined dense type="date" label="Dia" stack-label
-          style="min-width: 150px" @update:model-value="carregar"
+      <div class="cabecalho__acoes row items-center q-gutter-sm">
+        <q-btn-toggle
+          v-model="janela" dense unelevated no-caps
+          toggle-color="primary" color="grey-3" text-color="grey-8"
+          :options="[{ label: '30d', value: 30 }, { label: '90d', value: 90 }, { label: '180d', value: 180 }]"
+          @update:model-value="carregarTudo"
         />
-        <q-btn
-          flat dense round icon="refresh" color="grey-7" :loading="carregando"
-          @click="carregar"
-        >
+        <q-btn flat dense round icon="refresh" color="grey-7" :loading="carregando"
+               @click="carregarTudo">
           <q-tooltip>Atualizar</q-tooltip>
         </q-btn>
       </div>
     </div>
 
-    <div class="row q-col-gutter-md">
-      <!-- ── Cobertura ─────────────────────────────────────────────────── -->
-      <div class="col-12 col-md-7">
-        <q-card flat bordered class="full-height">
-          <q-card-section>
-            <div class="text-subtitle1">Cobertura</div>
-            <div class="text-caption text-grey-7">{{ legendaDoDia }}</div>
-          </q-card-section>
+    <q-banner v-if="insights && !insights.customers.length" class="bg-grey-2 rounded-borders">
+      <template #avatar><q-icon name="inventory" color="grey-7" /></template>
+      Nenhuma contagem nos últimos {{ janela }} dias. A evolução do estoque só
+      aparece depois que houver pelo menos duas contagens de um mesmo cliente.
+    </q-banner>
 
-          <q-inner-loading :showing="carregando && !dados">
+    <template v-else>
+      <!-- ── A linha do tempo ────────────────────────────────────────────── -->
+      <q-card flat bordered class="q-mb-md" ref="cardGrafico">
+        <q-card-section class="cabecalho">
+          <div class="cabecalho__texto">
+            <div class="text-subtitle1">Quanto havia, contagem a contagem</div>
+            <div class="text-caption text-grey-7">
+              Um ponto por contagem, na data em que foi feita. Dia sem contagem
+              não vira ponto.
+            </div>
+          </div>
+          <div class="cabecalho__acoes row items-center q-gutter-sm">
+            <q-select
+              v-model="clienteId" outlined dense emit-value map-options stack-label
+              style="min-width: 210px" label="Cliente"
+              :options="opcoesClientes" option-value="customer_id" option-label="label"
+              @update:model-value="trocarCliente"
+            />
+            <q-chip
+              v-if="produtoId" removable dense square color="grey-3" text-color="grey-9"
+              icon="filter_alt" @remove="verProduto(null)"
+            >
+              {{ historico?.product_name || 'produto' }}
+            </q-chip>
+          </div>
+        </q-card-section>
+
+        <q-card-section class="q-pt-none">
+          <div v-if="carregandoHistorico" class="text-center q-pa-lg">
             <q-spinner color="primary" size="2em" />
-          </q-inner-loading>
+          </div>
 
-          <template v-if="cobertura">
-            <q-card-section v-if="!cobertura.customers_total" class="q-pt-none">
-              <q-banner dense class="bg-grey-2 rounded-borders">
-                <template #avatar><q-icon name="link_off" color="grey-7" /></template>
-                Nenhum cliente vinculado a um promotor ativo. Enquanto a carteira
-                estiver vazia não há com o que comparar as contagens do dia.
-                <template #action>
-                  <q-btn flat dense no-caps color="primary" label="Definir vínculos"
-                         :to="{ name: 'AdminVinculos' }" />
-                </template>
-              </q-banner>
-            </q-card-section>
+          <q-banner v-else-if="pontos.length < 2" dense class="bg-grey-2 rounded-borders">
+            <template #avatar><q-icon name="timeline" color="grey-7" /></template>
+            {{ pontos.length === 1
+              ? 'Este cliente tem uma contagem só na janela — não há evolução para mostrar ainda.'
+              : 'Nenhuma contagem deste cliente na janela escolhida.' }}
+          </q-banner>
 
-            <template v-else>
-              <q-card-section class="q-pt-none">
-                <!-- O número que a tela lidera: lojas fechadas sobre a carteira -->
-                <div class="row items-baseline q-gutter-x-sm">
-                  <div class="numero-heroi">{{ cobertura.closed }}</div>
-                  <div class="text-h6 text-grey-6">de {{ cobertura.customers_total }}</div>
-                </div>
-                <div class="text-body2 text-grey-8">
-                  lojas com gôndola e estoque contados — as que já viram planilha
-                </div>
+          <template v-else>
+            <!-- Legenda sempre presente: são duas séries, e a identidade delas
+                 nunca fica só na cor. -->
+            <div class="row q-gutter-md q-mb-sm">
+              <div v-for="serie in SERIES" :key="serie.chave" class="row items-center">
+                <span class="marca-serie" :style="{ background: serie.cor }" />
+                <span class="text-caption text-grey-8 q-ml-xs">{{ serie.rotulo }}</span>
+              </div>
+            </div>
 
-                <div class="barra q-mt-md">
-                  <div
-                    v-for="faixa in faixas" :key="faixa.chave"
-                    v-show="faixa.valor"
-                    :class="`bg-${faixa.cor}`"
-                    :style="{ width: `${(faixa.valor / cobertura.customers_total) * 100}%` }"
+            <div ref="caixaGrafico" class="grafico">
+              <svg :width="largura" :height="ALTURA" @mousemove="mover" @mouseleave="foco = null">
+                <!-- Grade: hairline sólida, um tom fora da superfície -->
+                <g>
+                  <line
+                    v-for="t in ticksY" :key="`g${t.valor}`"
+                    :x1="MARGEM.esq" :x2="largura - MARGEM.dir" :y1="t.y" :y2="t.y"
+                    stroke="#e4e4e7" stroke-width="1"
                   />
-                </div>
+                  <text
+                    v-for="t in ticksY" :key="`r${t.valor}`"
+                    :x="MARGEM.esq - 8" :y="t.y + 4" text-anchor="end"
+                    class="rotulo-eixo"
+                  >{{ formatQtd(t.valor) }}</text>
+                </g>
 
-                <!-- Estado nunca fica só na cor: ícone e palavra do lado -->
-                <div class="row q-col-gutter-md q-mt-sm">
-                  <div v-for="faixa in faixas" :key="faixa.chave" class="col-auto row items-center">
-                    <q-icon :name="faixa.icone" :color="faixa.cor" size="18px" class="q-mr-xs" />
-                    <span class="text-weight-medium q-mr-xs">{{ faixa.valor }}</span>
-                    <span class="text-caption text-grey-7">{{ faixa.rotulo }}</span>
-                  </div>
-                </div>
-              </q-card-section>
+                <!-- Datas: só as que cabem, nunca uma por ponto -->
+                <text
+                  v-for="t in ticksX" :key="`d${t.dia}`"
+                  :x="t.x" :y="ALTURA - 8" text-anchor="middle" class="rotulo-eixo"
+                >{{ t.rotulo }}</text>
 
-              <q-separator />
+                <!-- Cruz do ponto sob o cursor -->
+                <line
+                  v-if="foco" :x1="foco.x" :x2="foco.x" :y1="MARGEM.topo"
+                  :y2="ALTURA - MARGEM.base" stroke="#a1a1aa" stroke-width="1"
+                />
 
-              <q-card-section>
-                <div class="text-caption text-grey-7 q-mb-sm">
-                  Cada promotor na própria carteira. Loja atendida por dois conta
-                  para os dois — por isso a soma pode passar do total acima.
-                </div>
+                <g v-for="serie in SERIES" :key="serie.chave">
+                  <polyline
+                    :points="linha(serie.chave)" fill="none" :stroke="serie.cor"
+                    stroke-width="2" stroke-linejoin="round" stroke-linecap="round"
+                  />
+                  <circle
+                    v-for="p in pontosDe(serie.chave)" :key="`${serie.chave}${p.day}`"
+                    :cx="p.x" :cy="p.y" r="4" :fill="serie.cor"
+                    stroke="#fff" stroke-width="2"
+                  />
+                  <!-- Rótulo direto só na ponta: valor em todo ponto vira ruído -->
+                  <text
+                    v-if="ultimoDe(serie.chave)"
+                    :x="ultimoDe(serie.chave).x + 8" :y="ultimoDe(serie.chave).y + 4"
+                    class="rotulo-ponta" :fill="serie.cor"
+                  >{{ formatQtd(ultimoDe(serie.chave).valor) }}</text>
+                </g>
+              </svg>
 
-                <div
-                  v-for="linha in cobertura.by_promoter" :key="linha.promoter_id"
-                  class="row items-center q-py-xs q-col-gutter-sm"
-                >
-                  <div class="col-12 col-sm-4 ellipsis">
-                    {{ linha.promoter_name || 'Sem nome' }}
-                  </div>
-                  <div class="col">
-                    <div class="barra barra--fina">
-                      <div
-                        v-for="faixa in faixasDe(linha)" :key="faixa.chave"
-                        v-show="faixa.valor"
-                        :class="`bg-${faixa.cor}`"
-                        :style="{ width: `${(faixa.valor / linha.customers_total) * 100}%` }"
-                      />
-                    </div>
-                  </div>
-                  <div class="col-auto text-caption text-grey-8 numero-tabela">
-                    {{ linha.closed }}/{{ linha.customers_total }}
-                  </div>
+              <div v-if="foco" class="dica" :style="posicaoDica">
+                <div class="text-weight-medium">{{ formatDia(foco.dia) }}</div>
+                <div v-for="serie in SERIES" :key="serie.chave" class="row items-center no-wrap">
+                  <span class="marca-serie" :style="{ background: serie.cor }" />
+                  <span class="q-ml-xs">{{ serie.rotulo }}:</span>
+                  <span class="q-ml-xs text-weight-medium">
+                    {{ foco.valores[serie.chave] === null
+                      ? 'não contado' : `${formatQtd(foco.valores[serie.chave])} un` }}
+                  </span>
                 </div>
-              </q-card-section>
-            </template>
+              </div>
+            </div>
+
+            <div class="text-caption text-grey-7 q-mt-sm">
+              {{ pontos.length }} contagens entre {{ formatDia(pontos[0].day) }} e
+              {{ formatDia(pontos[pontos.length - 1].day) }}.
+              Variação entre contagens — não é venda: sem os dados de entrega, o
+              que caiu saiu <em>pelo menos</em> aquilo.
+            </div>
           </template>
-        </q-card>
-      </div>
+        </q-card-section>
+      </q-card>
 
-      <!-- ── Visitas pela metade ───────────────────────────────────────── -->
-      <div class="col-12 col-md-5">
-        <q-card flat bordered class="full-height">
-          <q-card-section class="row items-start justify-between q-col-gutter-sm">
-            <div class="col">
-              <div class="text-subtitle1">Visitas pela metade</div>
+      <!-- ── Os três indicadores ─────────────────────────────────────────── -->
+      <div class="row q-col-gutter-md">
+        <div class="col-12 col-md-4">
+          <q-card flat bordered class="full-height">
+            <q-card-section>
+              <div class="text-subtitle1">
+                Produtos parados
+                <q-badge v-if="insights?.stalled_total" color="grey-6" class="q-ml-xs">
+                  {{ insights.stalled_total }}
+                </q-badge>
+              </div>
               <div class="text-caption text-grey-7">
-                Chegou um lado só — sem o outro, não sai planilha.
-              </div>
-            </div>
-            <div class="col-auto">
-              <q-btn-toggle
-                v-model="janela" dense unelevated no-caps
-                toggle-color="primary" color="grey-3" text-color="grey-8"
-                :options="[{ label: '7d', value: 7 }, { label: '30d', value: 30 }, { label: '90d', value: 90 }]"
-                @update:model-value="carregar"
-              />
-            </div>
-          </q-card-section>
-
-          <template v-if="travadas">
-            <q-card-section class="q-pt-none">
-              <div class="row items-baseline q-gutter-x-sm">
-                <div class="text-h4 text-weight-medium"
-                     :class="travadas.total ? 'text-orange-9' : 'text-grey-6'">
-                  {{ travadas.total }}
-                </div>
-                <div class="text-body2 text-grey-8">
-                  {{ travadas.total === 1 ? 'visita aberta' : 'visitas abertas' }}
-                  nos últimos {{ travadas.window_days }} dias
-                </div>
-              </div>
-              <div v-if="travadas.overdue" class="text-caption text-grey-8 q-mt-xs">
-                <q-icon name="priority_high" color="negative" size="16px" />
-                {{ travadas.overdue }}
-                {{ travadas.overdue === 1 ? 'passou' : 'passaram' }} do próprio dia —
-                {{ travadas.overdue === 1 ? 'essa não fecha' : 'essas não fecham' }}
-                mais sozinha{{ travadas.overdue === 1 ? '' : 's' }}.
+                Mesma quantidade em três contagens ou mais — não vendeu nem foi
+                reposto. É o indicador que menos sofre com contagem irregular:
+                a planura é o sinal.
               </div>
             </q-card-section>
-
-            <q-card-section v-if="!travadas.total" class="q-pt-none">
-              <q-banner dense class="bg-green-1 rounded-borders">
-                <template #avatar><q-icon name="done_all" color="positive" /></template>
-                Nenhuma contagem esperando o outro lado.
-              </q-banner>
-            </q-card-section>
-
-            <q-list v-else separator style="max-height: 420px; overflow-y: auto">
+            <q-separator />
+            <ListaVazia v-if="!insights?.stalled.length" texto="Nada parado na janela." />
+            <q-list v-else separator>
               <q-item
-                v-for="linha in travadas.items"
-                :key="`${linha.customer_id}|${linha.promoter_id}|${linha.day}`"
-                clickable v-ripple @click="abrirNasContagens(linha)"
+                v-for="p in insights.stalled" :key="`${p.customer_id}${p.product_id}`"
+                clickable v-ripple @click="verProduto(p)"
               >
                 <q-item-section>
-                  <q-item-label class="ellipsis">{{ linha.customer_name }}</q-item-label>
-                  <q-item-label caption>
-                    {{ linha.promoter_name }} · {{ formatDia(linha.day) }}
-                  </q-item-label>
-                  <q-item-label class="q-mt-xs">
-                    <q-chip dense square outline color="orange-9" icon="hourglass_top"
-                            class="q-ml-none">
-                      Falta {{ rotuloTipo(linha.missing_side).toLowerCase() }}
+                  <q-item-label class="ellipsis">{{ p.product_name }}</q-item-label>
+                  <q-item-label caption class="ellipsis">{{ p.customer_name }}</q-item-label>
+                </q-item-section>
+                <q-item-section side>
+                  <div class="text-right">
+                    <div class="text-weight-medium text-grey-9">
+                      {{ formatQtd(p.quantity) }} un
+                    </div>
+                    <div class="text-caption text-grey-7">
+                      {{ p.days }} dias · {{ p.counts }} contagens
+                    </div>
+                  </div>
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-card>
+        </div>
+
+        <div class="col-12 col-md-4">
+          <q-card flat bordered class="full-height">
+            <q-card-section>
+              <div class="text-subtitle1">Sumiu e voltou</div>
+              <div class="text-caption text-grey-7">
+                Comparando as duas últimas contagens do cliente. Compara a loja
+                com ela mesma, então não depende de o promotor ter digitado zero.
+              </div>
+            </q-card-section>
+            <q-separator />
+
+            <template v-for="grupo in GRUPOS" :key="grupo.chave">
+              <q-item-label header class="text-uppercase text-caption">
+                <q-icon :name="grupo.icone" :color="grupo.cor" size="16px" class="q-mr-xs" />
+                {{ grupo.rotulo }}
+                <span class="text-grey-6">({{ insights?.[`${grupo.chave}_total`] || 0 }})</span>
+              </q-item-label>
+              <div v-if="!insights?.[grupo.chave].length" class="q-px-md q-pb-sm text-caption text-grey-7">
+                {{ grupo.vazio }}
+              </div>
+              <q-list v-else separator>
+                <q-item
+                  v-for="m in insights[grupo.chave]" :key="`${m.customer_id}${m.product_id}`"
+                  clickable v-ripple @click="verProduto(m)"
+                >
+                  <q-item-section>
+                    <q-item-label class="ellipsis">{{ m.product_name }}</q-item-label>
+                    <q-item-label caption class="ellipsis">
+                      {{ m.customer_name }} · {{ m.days }} dias
+                    </q-item-label>
+                  </q-item-section>
+                  <q-item-section side class="text-caption numero-tabela"
+                                  :class="grupo.chave === 'gone' ? 'text-negative' : 'text-positive'">
+                    {{ formatQtd(m.previous) }} → {{ formatQtd(m.current) }}
+                  </q-item-section>
+                </q-item>
+              </q-list>
+            </template>
+          </q-card>
+        </div>
+
+        <div class="col-12 col-md-4">
+          <q-card flat bordered class="full-height">
+            <q-card-section>
+              <div class="text-subtitle1">
+                Gôndola vazia com estoque
+                <q-badge v-if="insights?.shelf_gap_total" color="orange-9" class="q-ml-xs">
+                  {{ insights.shelf_gap_total }}
+                </q-badge>
+              </div>
+              <div class="text-caption text-grey-7">
+                Zerado na prateleira e com saldo no depósito: a mercadoria está
+                na loja, atrás. É falha de reposição, não falta de produto.
+              </div>
+            </q-card-section>
+            <q-separator />
+            <ListaVazia v-if="!insights?.shelf_gap.length"
+                        texto="Nenhuma prateleira vazia com saldo guardado." />
+            <q-list v-else separator>
+              <q-item
+                v-for="f in insights.shelf_gap" :key="`${f.customer_id}${f.product_id}`"
+                clickable v-ripple @click="verProduto(f)"
+              >
+                <q-item-section>
+                  <q-item-label class="ellipsis">{{ f.product_name }}</q-item-label>
+                  <q-item-label caption class="ellipsis">{{ f.customer_name }}</q-item-label>
+                  <q-item-label v-if="f.repeated" class="q-mt-xs">
+                    <q-chip dense square outline color="orange-9" icon="repeat" class="q-ml-none">
+                      Repetido
                     </q-chip>
                   </q-item-label>
                 </q-item-section>
                 <q-item-section side>
-                  <q-chip dense square :color="idade(linha).cor" text-color="white"
-                          :icon="idade(linha).icone">
-                    {{ idade(linha).texto }}
-                  </q-chip>
+                  <div class="text-right">
+                    <div class="text-weight-medium text-grey-9">
+                      {{ formatQtd(f.estoque) }} un
+                    </div>
+                    <div class="text-caption text-grey-7">no depósito</div>
+                  </div>
                 </q-item-section>
               </q-item>
             </q-list>
-
-            <q-card-section
-              v-if="travadas.total > travadas.items.length" class="text-caption text-grey-7"
-            >
-              Mostrando as {{ travadas.items.length }} mais antigas de
-              {{ travadas.total }}.
-            </q-card-section>
-          </template>
-        </q-card>
+          </q-card>
+        </div>
       </div>
-    </div>
+    </template>
   </q-page>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, h, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { merchandisingApi } from '@/api/merchandising'
 
 const $q = useQuasar()
-const router = useRouter()
 
-const dados = ref(null)
+// Par validado para daltonismo: ΔE 22,5 sob deuteranopia contra a superfície
+// clara. O azul é um degrau mais claro do índigo da marca — o #1a237e do
+// cabeçalho é escuro demais para linha fina, e o teal escuro lê como cinza.
+const SERIES = [
+  { chave: 'gondola', rotulo: 'Gôndola', cor: '#3f51b5' },
+  { chave: 'estoque', rotulo: 'Estoque', cor: '#00a08f' },
+]
+
+const GRUPOS = [
+  { chave: 'gone', rotulo: 'Sumiu', icone: 'trending_down', cor: 'negative',
+    vazio: 'Nenhum produto zerou na última contagem.' },
+  { chave: 'returned', rotulo: 'Voltou', icone: 'trending_up', cor: 'positive',
+    vazio: 'Nenhum produto voltou depois de zerado.' },
+]
+
+const ALTURA = 240
+const MARGEM = { esq: 52, dir: 46, topo: 16, base: 30 }
+
+const janela = ref(90)
+const insights = ref(null)
+const historico = ref(null)
+const clienteId = ref(null)
+const produtoId = ref(null)
 const carregando = ref(false)
-const janela = ref(30)
+const carregandoHistorico = ref(false)
 
-/** 'AAAA-MM-DD' de hoje no relógio de quem está olhando — o mesmo dia local que
- *  o servidor usa para parear gôndola e estoque. */
-const hoje = () => {
-  const agora = new Date()
-  const mes = String(agora.getMonth() + 1).padStart(2, '0')
-  return `${agora.getFullYear()}-${mes}-${String(agora.getDate()).padStart(2, '0')}`
-}
-const dia = ref(hoje())
+const caixaGrafico = ref(null)
+const largura = ref(720)
+const foco = ref(null)
+let observador = null
 
-const cobertura = computed(() => dados.value?.coverage || null)
-const travadas = computed(() => dados.value?.stuck || null)
-
+const formatQtd = (v) => Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })
 const formatDia = (v) => (v ? new Date(`${v}T00:00:00`).toLocaleDateString('pt-BR') : '—')
-const rotuloTipo = (v) => (v === 'gondola' ? 'Gôndola' : 'Estoque')
+const diaCurto = (v) =>
+  new Date(`${v}T00:00:00`).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
 
-const legendaDoDia = computed(() =>
-  dia.value === hoje() ? 'Hoje' : formatDia(dia.value)
+const pontos = computed(() => historico.value?.points || [])
+
+const opcoesClientes = computed(() =>
+  (insights.value?.customers || []).map((c) => ({
+    ...c,
+    label: `${c.customer_name || 'Sem nome'} · ${c.complete_counts} ${
+      c.complete_counts === 1 ? 'contagem' : 'contagens'}`,
+  }))
 )
 
-/** As três faixas da barra, na ordem em que a visita caminha: fechou, está pela
- *  metade, não começou. */
-function faixasDe(numeros) {
-  return [
-    { chave: 'closed', valor: numeros.closed, cor: 'positive',
-      icone: 'done_all', rotulo: 'fechadas' },
-    { chave: 'partial', valor: numeros.partial, cor: 'orange-9',
-      icone: 'hourglass_top', rotulo: 'pela metade' },
-    { chave: 'missing', valor: numeros.missing, cor: 'grey-5',
-      icone: 'remove', rotulo: 'sem contagem' },
-  ]
-}
-const faixas = computed(() => (cobertura.value ? faixasDe(cobertura.value) : []))
+/** Componente local para o "nada aqui" das listas — três delas repetem isso. */
+const ListaVazia = (props) =>
+  h('div', { class: 'q-pa-md text-caption text-grey-7' }, props.texto)
+ListaVazia.props = ['texto']
 
-/** Quanto tempo a visita está esperando. Hoje é cinza porque pode ser o promotor
- *  ainda na loja; de três dias em diante deixa de ser espera. */
-function idade({ days_waiting: dias }) {
-  if (!dias) return { texto: 'hoje', cor: 'grey-6', icone: 'schedule' }
-  if (dias >= 3) return { texto: `${dias} dias`, cor: 'negative', icone: 'priority_high' }
-  return { texto: dias === 1 ? '1 dia' : `${dias} dias`, cor: 'orange-9', icone: 'schedule' }
+// ── Escalas ─────────────────────────────────────────────────────────────
+// O eixo X é TEMPO, não posição na lista: contagem quinzenal e contagem diária
+// não podem sair com o mesmo espaçamento, senão o gráfico mente sobre o ritmo.
+
+const emMs = (dia) => new Date(`${dia}T00:00:00`).getTime()
+
+const dominioX = computed(() => {
+  if (!pontos.value.length) return [0, 1]
+  const datas = pontos.value.map((p) => emMs(p.day))
+  const [min, max] = [Math.min(...datas), Math.max(...datas)]
+  return min === max ? [min - 86400000, max + 86400000] : [min, max]
+})
+
+const maiorValor = computed(() => {
+  const todos = pontos.value.flatMap((p) =>
+    SERIES.map((s) => p[s.chave]).filter((v) => v !== null && v !== undefined)
+  )
+  return Math.max(1, ...todos)
+})
+
+/** Passo redondo entre as marcas do eixo — 1, 2, 5 ou 10 vezes uma potência de
+ *  dez. É o passo que decide o topo, e não o contrário: partir o valor máximo em
+ *  quatro daria marcas em 6,25 e 18,75, que fazem o leitor decifrar o eixo em
+ *  vez de ler a curva. */
+const passoY = computed(() => {
+  const bruto = maiorValor.value / 4
+  const grandeza = 10 ** Math.floor(Math.log10(bruto))
+  const norma = bruto / grandeza
+  return (norma <= 1 ? 1 : norma <= 2 ? 2 : norma <= 5 ? 5 : 10) * grandeza
+})
+
+const topoY = computed(
+  () => Math.max(passoY.value, Math.ceil(maiorValor.value / passoY.value) * passoY.value)
+)
+
+const escalaX = (dia) => {
+  const [min, max] = dominioX.value
+  const util = largura.value - MARGEM.esq - MARGEM.dir
+  return MARGEM.esq + ((emMs(dia) - min) / (max - min)) * util
+}
+const escalaY = (valor) => {
+  const util = ALTURA - MARGEM.topo - MARGEM.base
+  return MARGEM.topo + util - (valor / topoY.value) * util
 }
 
-/** Leva para a tela de contagens já filtrada naquele promotor e naquele dia — a
- *  linha da visita é a primeira que aparece lá. */
-function abrirNasContagens(linha) {
-  router.push({
-    name: 'AdminVisitas',
-    query: { promoter_id: linha.promoter_id, date_from: linha.day, date_to: linha.day },
-  })
+const ticksY = computed(() => {
+  const marcas = []
+  for (let v = 0; v <= topoY.value + 1e-9; v += passoY.value) {
+    marcas.push({ valor: v, y: escalaY(v) })
+  }
+  return marcas
+})
+
+/** Só as datas que cabem sem colidir: uma a cada N pontos, sempre com a
+ *  primeira e a última. */
+const ticksX = computed(() => {
+  const cabem = Math.max(2, Math.floor((largura.value - MARGEM.esq - MARGEM.dir) / 64))
+  const passo = Math.max(1, Math.ceil(pontos.value.length / cabem))
+  return pontos.value
+    .map((p, i) => ({ dia: p.day, x: escalaX(p.day), rotulo: diaCurto(p.day), i }))
+    .filter((t, i) => i % passo === 0 || i === pontos.value.length - 1)
+})
+
+/** Os pontos medidos de uma série. Lado não contado não vira ponto — e a linha
+ *  liga as duas medições vizinhas, que é o que de fato se sabe. */
+function pontosDe(chave) {
+  return pontos.value
+    .filter((p) => p[chave] !== null && p[chave] !== undefined)
+    .map((p) => ({ day: p.day, valor: p[chave], x: escalaX(p.day), y: escalaY(p[chave]) }))
+}
+const linha = (chave) => pontosDe(chave).map((p) => `${p.x},${p.y}`).join(' ')
+const ultimoDe = (chave) => pontosDe(chave).at(-1) || null
+
+// ── Cursor ──────────────────────────────────────────────────────────────
+
+function mover(evento) {
+  if (!pontos.value.length) return
+  const caixa = evento.currentTarget.getBoundingClientRect()
+  const x = evento.clientX - caixa.left
+
+  let perto = pontos.value[0]
+  for (const p of pontos.value) {
+    if (Math.abs(escalaX(p.day) - x) < Math.abs(escalaX(perto.day) - x)) perto = p
+  }
+  foco.value = {
+    dia: perto.day,
+    x: escalaX(perto.day),
+    valores: Object.fromEntries(
+      SERIES.map((s) => [s.chave, perto[s.chave] ?? null])
+    ),
+  }
 }
 
-async function carregar() {
+/** A dica acompanha o ponto, mas não sai da caixa pelos lados. */
+const posicaoDica = computed(() => {
+  if (!foco.value) return {}
+  const meio = largura.value / 2
+  return foco.value.x > meio
+    ? { right: `${largura.value - foco.value.x + 12}px`, top: '12px' }
+    : { left: `${foco.value.x + 12}px`, top: '12px' }
+})
+
+// ── Dados ───────────────────────────────────────────────────────────────
+
+async function carregarInsights() {
+  const dados = await merchandisingApi.stockInsights({ days: janela.value })
+  insights.value = dados
+
+  // Mantém o cliente escolhido se ele ainda tiver contagem na nova janela;
+  // senão cai no que tem mais história, que é onde há o que ver.
+  const existe = dados.customers.some((c) => c.customer_id === clienteId.value)
+  if (!existe) {
+    clienteId.value = dados.customers[0]?.customer_id || null
+    produtoId.value = null
+  }
+}
+
+async function carregarHistorico() {
+  if (!clienteId.value) {
+    historico.value = null
+    return
+  }
+  carregandoHistorico.value = true
+  try {
+    historico.value = await merchandisingApi.stockHistory({
+      customer_id: clienteId.value,
+      product_id: produtoId.value || undefined,
+      days: janela.value,
+    })
+  } finally {
+    carregandoHistorico.value = false
+  }
+}
+
+async function carregarTudo() {
   carregando.value = true
   try {
-    dados.value = await merchandisingApi.dashboard({
-      day: dia.value || undefined,
-      stuck_days: janela.value,
-    })
+    await carregarInsights()
+    await carregarHistorico()
   } catch (error) {
     $q.notify({
       type: 'negative',
-      message: error.response?.data?.detail || 'Erro ao carregar o painel',
+      message: error.response?.data?.detail || 'Erro ao carregar a evolução',
     })
   } finally {
     carregando.value = false
   }
 }
 
-onMounted(carregar)
+function trocarCliente() {
+  produtoId.value = null
+  carregarHistorico()
+}
+
+/** Clicar numa linha dos indicadores leva o gráfico até aquele produto — é a
+ *  pergunta seguinte de quem lê "parado há 28 dias": parado em que patamar. */
+function verProduto(linha) {
+  produtoId.value = linha?.product_id || null
+  if (linha?.customer_id) clienteId.value = linha.customer_id
+  carregarHistorico()
+  nextTick(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+}
+
+function medir() {
+  if (caixaGrafico.value) largura.value = caixaGrafico.value.clientWidth || 720
+}
+
+onMounted(async () => {
+  await carregarTudo()
+  await nextTick()
+  medir()
+  observador = new ResizeObserver(medir)
+  if (caixaGrafico.value) observador.observe(caixaGrafico.value)
+})
+
+onBeforeUnmount(() => observador?.disconnect())
 </script>
 
 <style scoped>
-/* O número que a tela lidera. Figuras proporcionais: `tabular-nums` daria a
-   todo dígito a largura do zero, e em corpo grande isso fica frouxo. */
-.numero-heroi {
-  font-size: 52px;
-  line-height: 1;
+/* Título e controles lado a lado enquanto couberem, empilhados quando não.
+   Não dá para deixar isso com `col` + `col-12`: `col` tem `flex-shrink: 1` e
+   base zero, então ele encolhe até o título virar uma letra por linha em vez de
+   empurrar os controles para baixo. A base de 240px é o que decide a quebra. */
+.cabecalho {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.cabecalho__texto {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+.cabecalho__acoes {
+  flex: 0 0 auto;
+}
+
+.grafico {
+  position: relative;
+  width: 100%;
+}
+.grafico svg {
+  display: block;
+  overflow: visible;
+}
+
+.rotulo-eixo {
+  font-size: 11px;
+  fill: #71717a;
+  font-variant-numeric: tabular-nums;
+}
+.rotulo-ponta {
+  font-size: 12px;
   font-weight: 600;
 }
 
-/* Nas colunas é o contrário: os números precisam alinhar entre as linhas. */
-.numero-tabela {
-  font-variant-numeric: tabular-nums;
+.marca-serie {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  flex: 0 0 auto;
 }
 
-/* Barra empilhada: pontas arredondadas e 2px da própria superfície entre as
-   faixas — separador desenhado, e não borda em volta de cada pedaço. */
-.barra {
-  display: flex;
-  gap: 2px;
-  height: 12px;
+.dica {
+  position: absolute;
+  background: #fff;
+  border: 1px solid #e4e4e7;
   border-radius: 6px;
-  overflow: hidden;
-  background: transparent;
+  padding: 6px 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  pointer-events: none;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 12%);
+  white-space: nowrap;
 }
-.barra--fina {
-  height: 8px;
-  border-radius: 4px;
+
+/* Números em coluna precisam alinhar entre as linhas. */
+.numero-tabela {
+  font-variant-numeric: tabular-nums;
 }
 </style>

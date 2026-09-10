@@ -62,11 +62,19 @@ export const merchandisingApi = {
 
   // ── Administrador ─────────────────────────────────────────────────────
 
-  /** Os dois painéis da tela inicial: cobertura do dia e visitas pela metade.
-   *  `day` é o dia local a medir; `stuck_days`, o quanto a lista de travadas
-   *  olha para trás — ela conta sempre a partir de hoje, não de `day`. */
-  async dashboard(params = {}) {
-    const { data } = await apiClient.get('/merchandising/dashboard', {
+  /** Os indicadores de evolução do estoque: parados, sumidos, voltados e
+   *  gôndola vazia com saldo no depósito. Tudo é variação entre contagens —
+   *  o app não conhece entregas, então nada disso é venda. */
+  async stockInsights(params = {}) {
+    const { data } = await apiClient.get('/merchandising/stock-insights', {
+      params: normalizeParams(params),
+    })
+    return data
+  },
+
+  /** A linha do tempo de um cliente — da loja inteira, ou de um produto. */
+  async stockHistory(params = {}) {
+    const { data } = await apiClient.get('/merchandising/stock-history', {
       params: normalizeParams(params),
     })
     return data

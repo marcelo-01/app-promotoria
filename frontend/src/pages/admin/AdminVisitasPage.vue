@@ -205,13 +205,11 @@
 
 <script setup>
 import { onMounted, reactive, ref } from 'vue'
-import { useRoute } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { merchandisingApi } from '@/api/merchandising'
 import { usersApi } from '@/api/users'
 
 const $q = useQuasar()
-const route = useRoute()
 
 const visitas = ref([])
 const promotores = ref([])
@@ -221,13 +219,8 @@ const baixando = ref(false)
 const detalheAberto = ref(false)
 const detalhe = ref(null)
 
-// Vazios, ou o que a URL trouxer: o painel do dia manda para cá com o promotor
-// e o dia da visita que o administrador clicou, e a tela abre já filtrada nela.
 const filtros = reactive({
-  date_from: route.query.date_from || '',
-  date_to: route.query.date_to || '',
-  promoter_id: route.query.promoter_id || null,
-  status: route.query.status || null,
+  date_from: '', date_to: '', promoter_id: null, status: null,
 })
 const paginacao = ref({ page: 1, rowsPerPage: 25, rowsNumber: 0 })
 
