@@ -56,6 +56,21 @@
           </q-btn>
         </q-card-section>
 
+        <!-- Antes dos dois botões de contagem, e de propósito: retirar o
+             vencido primeiro faz a contagem do dia já ser o que sobrou. -->
+        <q-card-section class="q-pt-none q-pb-sm">
+          <q-btn
+            outline no-caps class="full-width faixa-vencidos"
+            color="red-8" icon="delete_sweep" align="left"
+            @click="abrirVencidos(customer)"
+          >
+            <div class="column items-start q-ml-sm">
+              <div class="text-weight-bold">Retirar vencidos</div>
+              <div class="text-caption">Antes de contar, se houver produto vencido.</div>
+            </div>
+          </q-btn>
+        </q-card-section>
+
         <q-card-section class="row q-col-gutter-sm q-pt-none">
           <div v-for="tipo in TIPOS" :key="tipo.value" class="col-6">
             <q-btn
@@ -152,6 +167,14 @@ function abrir(customer, tipo) {
 /** Coleta de vencimento em aberto hoje neste cliente. */
 const vencimentoPendente = (customerId) => Boolean(visita.vencimentoPendente(customerId))
 
+function abrirVencidos(customer) {
+  router.push({
+    name: 'PromotorVencidos',
+    params: { customerId: customer.id },
+    query: { c: customer.name },
+  })
+}
+
 function abrirVencimento(customer) {
   router.push({
     name: 'PromotorVencimento',
@@ -218,6 +241,14 @@ onUnmounted(() => clearTimeout(debounce))
 .faixa-vencimento {
   border-radius: 12px;
   padding: 8px 12px;
+  text-align: left;
+}
+
+/* Contorno e não preenchido: é uma ação eventual, não a do dia. Não pode
+   competir com os dois botões de contagem logo abaixo. */
+.faixa-vencidos {
+  border-radius: 12px;
+  padding: 6px 12px;
   text-align: left;
 }
 

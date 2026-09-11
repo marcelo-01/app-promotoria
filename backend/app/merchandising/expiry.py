@@ -18,19 +18,37 @@ unidades paradas há cinco semanas são cem unidades a cinco semanas do vencimen
 
 O RAZÃO DE LOTES
 ----------------
-Percorrendo as contagens completas do produto, em ordem:
+Percorrendo as contagens completas do produto, em ordem, e em cada intervalo:
 
-* estoque SUBIU  → houve entrega: abre um lote com a diferença, datado ali;
-* estoque CAIU   → saiu mercadoria: consome dos lotes que vencem primeiro;
-* estoque IGUAL  → nada muda, e os lotes envelhecem mais uma semana.
+1. **o que entrou** — as notas emitidas para aquele cliente no intervalo abrem
+   um lote cada, datado pela emissão;
+2. **o que foi para o lixo** — o vencido que o promotor retirou sai do lote
+   correspondente, e NÃO conta como venda;
+3. **a conferência** — o que a contagem achou a menos do que o razão esperava
+   saiu pela porta da frente (consome dos lotes que vencem primeiro); o que ela
+   achou a mais é entrada que a planilha não cobriu, e vira um lote datado ali.
 
-No fim sobra uma fila de lotes, e o primeiro dela — o que vence antes — é o que
-manda. O vencimento de um lote estimado é o dia em que ele apareceu mais o
+Repare no que a ordem faz: a contagem deixa de ser a FONTE dos lotes e passa a
+ser a CONFERÊNCIA deles. E quando não há nota nenhuma no intervalo — planilha
+ainda não anexada, período antigo — o passo 3 sozinho reproduz exatamente o
+comportamento antigo (subiu vira lote, caiu consome). O razão degrada para a
+estimativa pura sem nenhum código de exceção.
+
+O vencimento de um lote estimado é a data em que ele entrou mais o
 `arrival_shelf_life_days` do produto: com quantos dias para vencer a mercadoria
 costuma chegar ao cliente.
 
-É função pura da série: nada é gravado, nada é incremental. Corrigir uma
+É função pura das entradas: nada é gravado, nada é incremental. Corrigir uma
 contagem antiga reescreve o razão inteiro certo, sozinho.
+
+POR QUE O VENCIDO RETIRADO NÃO É DETALHE
+----------------------------------------
+Sem registrar o que o promotor tira da gôndola, mercadoria que foi para o lixo é
+lida como venda: o estoque caiu e não há como saber por quê. O efeito é perverso
+e trabalha contra esta função inteira — a loja parece girar mais rápido, "dias
+para escoar" encolhe, e o alerta de "não vai dar tempo de vender" deixa de
+disparar justamente no produto que está vencendo. Quanto mais vencia, menos o
+sistema avisava.
 
 A COLETA MANDA MAIS QUE A ESTIMATIVA
 ------------------------------------
@@ -42,13 +60,17 @@ O QUE ESTES NÚMEROS NÃO SÃO
 ---------------------------
 Estimativa, e não medição — três limites que valem repetir:
 
-* Entrega escondida (vendeu 20 e chegou 20 entre duas contagens) mantém a DATA
-  do lote velho certa, mas superestima o TAMANHO dele. Erra para o lado de pedir
-  coleta demais, e a coleta corrige.
 * A fila supõe que a loja vende o mais velho primeiro. É o que o promotor
-  organiza estando lá, mas é suposição.
-* A data de chegada tem a precisão da visita: com visita semanal, ±7 dias. É por
-  isso que as janelas aqui são largas, e não de dois ou três dias.
+  organiza estando lá, mas é suposição — e é a única das fraquezas originais que
+  nem a planilha nem a retirada resolvem.
+* A data da nota é a da EMISSÃO, não a da entrega (a planilha traz a de entrega
+  vazia na maior parte das linhas). O caminhão leva um ou dois dias, então a
+  mercadoria aparece no razão um pouco antes de existir na loja. Numa contagem
+  semanal isso cabe no ruído; e some sozinho na contagem seguinte.
+* Sem nota no intervalo, valem as três ressalvas antigas: entrega escondida
+  superestima o tamanho do lote velho (erra para o lado de pedir coleta demais),
+  e a data de chegada tem a precisão da visita — com visita semanal, ±7 dias. É
+  por isso que as janelas aqui são largas, e não de dois ou três dias.
 """
 from __future__ import annotations
 
@@ -130,66 +152,118 @@ def _reconcile(lots: list[Lot], total: float, day: date, arrival_days: int) -> N
         _consume(lots, coletado - total)
 
 
+def _take(lots: list[Lot], expires_on: date, amount: float) -> None:
+    """Tira unidades do lote que vence NAQUELA data — o vencido que o promotor
+    retirou e leu na embalagem.
+
+    Se não houver lote com essa data, a estimativa errou em algum ponto do
+    passado; a mercadoria saiu do mesmo jeito, então sai pela frente da fila. É
+    a leitura menos errada disponível: o que foi retirado por vencimento era,
+    por definição, o mais velho que havia.
+    """
+    for lot in lots:
+        if lot.expires_on == expires_on:
+            tirado = min(lot.quantity, amount)
+            lot.quantity -= tirado
+            amount -= tirado
+            break
+    lots[:] = [lot for lot in lots if lot.quantity > EPS]
+    if amount > EPS:
+        _consume(lots, amount)
+
+
+@dataclass
+class Ledger:
+    """O estado do produto naquele cliente no fim da história."""
+
+    lots: list[Lot]
+    # Unidades que saíram pela porta da frente na janela observada. Não é a
+    # venda medida — é o que sobra depois de descontar entradas e retiradas de
+    # tudo que mudou entre as contagens.
+    sold: float
+    days: int          # dias entre a primeira e a última contagem completa
+    counts: int        # quantas contagens completas entraram na conta
+
+    @property
+    def velocity(self) -> float:
+        """Unidades por dia. Zero quando não há intervalo em que acreditar."""
+        return self.sold / self.days if self.days > 0 else 0.0
+
+
 def ledger(
     serie: Series,
     arrival_days: int,
     collections: Optional[dict[str, Sequence[tuple[date, float]]]] = None,
-) -> list[Lot]:
+    deliveries: Optional[Sequence[tuple[date, float]]] = None,
+    removals: Optional[Sequence[tuple[date, date, float]]] = None,
+) -> Ledger:
     """A história do produto → os lotes que ainda estão na loja, o mais velho
-    primeiro.
+    primeiro, e quanto saiu pela frente no caminho.
 
-    `collections` são as datas já coletadas, por dia (`'2026-09-11'`). No dia de
-    uma coleta a fila inteira é trocada por ela: data lida vale mais que data
-    calculada.
+    `deliveries` são `(emissão, quantidade)`; `removals`, `(dia da retirada,
+    data que estava na embalagem, quantidade)`; `collections`, as datas já
+    coletadas, indexadas pelo dia (`'2026-09-11'`).
+
+    No dia de uma coleta a fila inteira é trocada por ela: data lida vale mais
+    que data calculada, e o razão volta a andar em cima de verdade de campo.
     """
     collections = collections or {}
+    entradas = sorted(deliveries or [])
+    retiradas = sorted(removals or [])
+
     lots: list[Lot] = []
-    anterior: Optional[float] = None
+    vendido = 0.0
+    completos = serie.complete_days()
+    anterior: Optional[date] = None
 
-    for dia, _, _, total in serie.complete_days():
+    for dia, _, _, total in completos:
         hoje = date.fromisoformat(dia)
-        coleta = collections.get(dia)
 
+        # ── 1. o que entrou desde a contagem anterior ─────────────────────
+        # Na primeira contagem o intervalo é aberto para trás: nota antiga vira
+        # lote velho, e a conferência do passo 3 desconta o que já tinha sido
+        # vendido antes de existir contagem.
+        for emitida, quanto in entradas:
+            if (anterior is None or emitida > anterior) and emitida <= hoje:
+                lots.append(Lot(emitida + timedelta(days=arrival_days), quanto, False))
+
+        # ── 2. o que o promotor retirou por vencimento ────────────────────
+        # Sai do razão SEM entrar em `vendido`: foi para o lixo, não para o caixa.
+        for retirado_em, vencia_em, quanto in retiradas:
+            if (anterior is None or retirado_em > anterior) and retirado_em <= hoje:
+                _take(lots, vencia_em, quanto)
+
+        lots.sort(key=lambda lot: lot.expires_on)
+
+        # ── 3. a conferência contra o que o promotor achou ────────────────
+        coleta = collections.get(dia)
         if coleta:
             lots = [Lot(quando, float(quanto), True) for quando, quanto in coleta]
             lots.sort(key=lambda lot: lot.expires_on)
             _reconcile(lots, total, hoje, arrival_days)
-        elif anterior is None:
-            # Primeira contagem: tudo que está lá é um lote só, datado aqui. O
-            # estoque pode já estar velho, e então esta data o rejuvenesce — o
-            # erro é para o lado de alertar de menos, e some em algumas semanas.
-            if total > EPS:
-                lots = [Lot(hoje + timedelta(days=arrival_days), total, False)]
         else:
-            delta = total - anterior
-            if delta > EPS:
-                lots.append(Lot(hoje + timedelta(days=arrival_days), delta, False))
-            elif delta < -EPS:
-                _consume(lots, -delta)
+            esperado = sum(lot.quantity for lot in lots)
+            if total < esperado - EPS:
+                # Saiu mais do que as entradas e retiradas explicam: venda.
+                saiu = esperado - total
+                _consume(lots, saiu)
+                if anterior is not None:
+                    vendido += saiu
+            elif total > esperado + EPS:
+                # Achou mais do que o razão previa: entrada que a planilha não
+                # cobriu. Datada aqui, que é o mais novo que ela poderia ser.
+                lots.append(Lot(hoje + timedelta(days=arrival_days), total - esperado, False))
 
-        anterior = total
         lots.sort(key=lambda lot: lot.expires_on)
+        anterior = hoje
 
-    return lots
+    dias = 0
+    if len(completos) >= 2:
+        dias = (
+            date.fromisoformat(completos[-1][0]) - date.fromisoformat(completos[0][0])
+        ).days
 
-
-def velocity(serie: Series) -> float:
-    """Unidades que saem por dia — o piso, nunca a venda.
-
-    Soma só as quedas entre contagens e divide pelos dias observados. Entrega que
-    entrou no meio do intervalo não aparece, então o número é sempre menor ou
-    igual à venda real — e um giro subestimado alerta mais, que é o lado seguro.
-    """
-    completos = serie.complete_days()
-    if len(completos) < 2:
-        return 0.0
-
-    saiu = sum(
-        max(0.0, anterior[3] - atual[3])
-        for anterior, atual in zip(completos, completos[1:])
-    )
-    dias = (date.fromisoformat(completos[-1][0]) - date.fromisoformat(completos[0][0])).days
-    return saiu / dias if dias > 0 else 0.0
+    return Ledger(lots=lots, sold=vendido, days=dias, counts=len(completos))
 
 
 # ─── O veredito ───────────────────────────────────────────────────────────────
@@ -216,6 +290,8 @@ def forecast(
     arrival_days: int,
     today: date,
     collections: Optional[dict[str, Sequence[tuple[date, float]]]] = None,
+    deliveries: Optional[Sequence[tuple[date, float]]] = None,
+    removals: Optional[Sequence[tuple[date, date, float]]] = None,
 ) -> Optional[Forecast]:
     """O lote mais velho deste produto neste cliente, com o veredito.
 
@@ -233,26 +309,25 @@ def forecast(
     Produto que não girou nada cai sempre em `nao_escoa` ao entrar no horizonte —
     e está certo: estoque parado não vai embora sozinho, vence.
     """
-    lots = ledger(serie, arrival_days, collections)
-    if not lots or lots[0].quantity <= EPS:
+    razao = ledger(serie, arrival_days, collections, deliveries, removals)
+    if not razao.lots or razao.lots[0].quantity <= EPS:
         return None
 
-    velho = lots[0]
+    velho = razao.lots[0]
     faltam = (velho.expires_on - today).days
 
-    giro = velocity(serie)
+    giro = razao.velocity
     escoar = velho.quantity / giro if giro > EPS else None
-    tem_historico = len(serie.complete_days()) >= MIN_COUNTS_FOR_VELOCITY
 
-    razao = ""
+    motivo = ""
     if faltam <= alert_window(arrival_days):
-        razao = "vence"
+        motivo = "vence"
     elif (
-        tem_historico
+        razao.counts >= MIN_COUNTS_FOR_VELOCITY
         and faltam <= alert_horizon(arrival_days)
         and (escoar is None or escoar > faltam)
     ):
-        razao = "nao_escoa"
+        motivo = "nao_escoa"
 
     return Forecast(
         customer_id=serie.customer_id,
@@ -262,8 +337,8 @@ def forecast(
         days_left=faltam,
         days_to_sell=escoar,
         collected=velho.collected,
-        alert=bool(razao),
-        reason=razao,
+        alert=bool(motivo),
+        reason=motivo,
     )
 
 
@@ -272,14 +347,17 @@ def forecasts(
     arrival_days: dict[UUID, Optional[int]],
     today: date,
     collections: Optional[dict[tuple[UUID, UUID], dict[str, Sequence[tuple[date, float]]]]] = None,
+    deliveries: Optional[dict[tuple[UUID, UUID], Sequence[tuple[date, float]]]] = None,
+    removals: Optional[dict[tuple[UUID, UUID], Sequence[tuple[date, date, float]]]] = None,
 ) -> dict[tuple[UUID, UUID], Forecast]:
     """O veredito de cada (cliente, produto) que tem um a dar.
 
-    Produto sem `arrival_shelf_life_days` cadastrado fica de fora inteiro: sem
-    saber com quanta vida a mercadoria chega, não há data que se possa estimar, e
-    inventar uma seria pior que ficar calado.
+    As três fontes extras vêm indexadas por `(cliente, produto)` — a mesma chave
+    da série. Produto sem `arrival_shelf_life_days` cadastrado fica de fora
+    inteiro: sem saber com quanta vida a mercadoria chega, não há data que se
+    possa estimar, e inventar uma seria pior que ficar calado.
     """
-    collections = collections or {}
+    collections, deliveries, removals = collections or {}, deliveries or {}, removals or {}
     saida = {}
 
     for serie in series:
@@ -288,7 +366,10 @@ def forecasts(
             continue
 
         chave = (serie.customer_id, serie.product_id)
-        veredito = forecast(serie, dias, today, collections.get(chave))
+        veredito = forecast(
+            serie, dias, today,
+            collections.get(chave), deliveries.get(chave), removals.get(chave),
+        )
         if veredito:
             saida[chave] = veredito
 

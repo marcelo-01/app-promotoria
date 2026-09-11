@@ -50,6 +50,9 @@ def _check_arrival(payload):
 
 class ProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
+    # Código do item no ERP ('A21030'). É por ele que a planilha de faturamento
+    # encontra este produto — sem ele, as notas daquele item ficam de fora.
+    sku: Optional[str] = Field(default=None, max_length=50)
     package_size: Decimal = _PACKAGE_SIZE
     shelf_life_days: Optional[int] = _SHELF_LIFE_DAYS
     arrival_shelf_life_days: Optional[int] = _ARRIVAL_SHELF_LIFE_DAYS
@@ -66,6 +69,7 @@ class ProductCreate(BaseModel):
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    sku: Optional[str] = Field(default=None, max_length=50)
     package_size: Optional[Decimal] = Field(default=None, gt=0, le=100000)
     shelf_life_days: Optional[int] = Field(default=None, gt=0, le=3650)
     arrival_shelf_life_days: Optional[int] = Field(default=None, gt=0, le=3650)
@@ -88,6 +92,7 @@ class ProductResponse(BaseModel):
     id: UUID
     tenant_id: UUID
     name: str
+    sku: Optional[str] = None
     package_size: Optional[Decimal] = None
     shelf_life_days: Optional[int] = None
     arrival_shelf_life_days: Optional[int] = None

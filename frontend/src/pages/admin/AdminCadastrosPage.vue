@@ -160,6 +160,16 @@
         <q-card-section>
           <q-input v-model="clienteForm.name" outlined dense autofocus
                    label="Nome do cliente *" @keyup.enter="salvarCliente" />
+
+          <q-input
+            v-model="clienteForm.document" outlined dense clearable class="q-mt-md"
+            label="CNPJ / CPF"
+            hint="É por ele que a planilha de faturamento encontra este cliente.
+                  Em branco, as notas dele não entram no sistema."
+            @keyup.enter="salvarCliente"
+          >
+            <template #prepend><q-icon name="badge" /></template>
+          </q-input>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat no-caps label="Cancelar" v-close-popup />
@@ -179,6 +189,15 @@
         <q-card-section class="q-gutter-md">
           <q-input v-model="produtoForm.name" outlined dense autofocus
                    label="Nome do produto *" />
+
+          <q-input
+            v-model="produtoForm.sku" outlined dense clearable
+            label="Código no ERP"
+            hint="O COD. ITEM da planilha de faturamento (ex.: A21030). Em branco,
+                  as notas deste produto não entram no sistema."
+          >
+            <template #prepend><q-icon name="qr_code_2" /></template>
+          </q-input>
 
           <q-input
             v-model.number="produtoForm.package_size" outlined dense
@@ -306,10 +325,14 @@ const buscaCliente = ref('')
 const carregandoClientes = ref(false)
 const dialogCliente = ref(false)
 
-const clienteForm = reactive({ id: null, name: '' })
+const clienteForm = reactive({ id: null, name: '', document: '' })
 
 const colunasCliente = [
   { name: 'name', label: 'Nome', field: 'name', align: 'left', sortable: true },
+  // Sem CNPJ o cliente não recebe as notas da planilha — a coluna existe para
+  // esse buraco aparecer na lista, não só no relatório da importação.
+  { name: 'document', label: 'CNPJ / CPF', field: 'document', align: 'left',
+    sortable: true, format: (v) => (v ? formatDoc(v) : '—') },
   { name: 'status', label: 'Situação', field: 'status', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
@@ -324,7 +347,9 @@ async function carregarClientes() {
 }
 
 function abrirCliente(row) {
-  Object.assign(clienteForm, { id: row?.id || null, name: row?.name || '' })
+  Object.assign(clienteForm, {
+    id: row?.id || null, name: row?.name || '', document: row?.document || '',
+  })
   dialogCliente.value = true
 }
 
@@ -335,10 +360,16 @@ async function salvarCliente() {
   }
   salvando.value = true
   try {
+    // O servidor guarda só os dígitos; em branco vai como null e desfaz o
+    // vínculo com a planilha.
+    const payload = {
+      name: clienteForm.name,
+      document: clienteForm.document || null,
+    }
     if (clienteForm.id) {
-      await customersApi.update(clienteForm.id, { name: clienteForm.name })
+      await customersApi.update(clienteForm.id, payload)
     } else {
-      await customersApi.create({ name: clienteForm.name })
+      await customersApi.create(payload)
     }
     dialogCliente.value = false
     await carregarClientes()
@@ -367,7 +398,7 @@ const carregandoProdutos = ref(false)
 const dialogProduto = ref(false)
 
 const produtoForm = reactive({
-  id: null, name: '', package_size: 1, shelf_life_days: null,
+  id: null, name: '', sku: '', package_size: 1, shelf_life_days: null,
   arrival_shelf_life_days: null, image_url: null,
 })
 const fotoArquivo = ref(null)
@@ -378,6 +409,8 @@ let previewUrl = null
 const colunasProduto = [
   { name: 'foto', label: 'Foto', field: 'image_url', align: 'left' },
   { name: 'name', label: 'Produto', field: 'name', align: 'left', sortable: true },
+  { name: 'sku', label: 'Cód. ERP', field: 'sku', align: 'left', sortable: true,
+    format: (v) => v || '—' },
   { name: 'package_size', label: 'Un. por caixa', field: 'package_size', align: 'right',
     sortable: true, format: (v) => formatQtd(v) },
   { name: 'shelf_life_days', label: 'Validade', field: 'shelf_life_days', align: 'right',
@@ -390,6 +423,18 @@ const colunasProduto = [
 
 const formatQtd = (v) =>
   v == null ? '1' : Number(v).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
+
+/** 14 dígitos viram CNPJ; 11, CPF. O banco guarda só os dígitos. */
+function formatDoc(digitos) {
+  const d = String(digitos || '')
+  if (d.length === 14) {
+    return `${d.slice(0, 2)}.${d.slice(2, 5)}.${d.slice(5, 8)}/${d.slice(8, 12)}-${d.slice(12)}`
+  }
+  if (d.length === 11) {
+    return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`
+  }
+  return d
+}
 
 async function carregarProdutos() {
   carregandoProdutos.value = true
@@ -409,6 +454,7 @@ function abrirProduto(row) {
   Object.assign(produtoForm, {
     id: row?.id || null,
     name: row?.name || '',
+    sku: row?.sku || '',
     package_size: Number(row?.package_size) || 1,
     shelf_life_days: row?.shelf_life_days ?? null,
     arrival_shelf_life_days: row?.arrival_shelf_life_days ?? null,
@@ -494,6 +540,7 @@ async function salvarProduto() {
     // A foto vai numa segunda chamada (multipart): produto novo só ganha id aqui.
     const payload = {
       name: produtoForm.name,
+      sku: produtoForm.sku || null,
       package_size: Number(produtoForm.package_size),
       shelf_life_days: semValidade ? null : Number(validade),
       arrival_shelf_life_days: semChegada ? null : Number(chegada),

@@ -10,17 +10,19 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.service import CustomersService
+from app.infrastructure.persistence.models.delivery import ProductDelivery, ProductRemoval
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
-from app.merchandising import consolidation, evolution, expiry
+from app.merchandising import consolidation, evolution, expiry, invoices
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    CountProductResponse, CountSheetResponse, MovedProductResponse,
-    ProductExpiryInput, ProductExpiryResponse, PromoterCustomerResponse,
-    ShelfGapResponse, StalledProductResponse,
+    CountProductResponse, CountSheetResponse, InvoiceImportResponse,
+    MovedProductResponse, ProductExpiryInput, ProductExpiryResponse,
+    ProductRemovalCreate, ProductRemovalResponse, PromoterCustomerResponse,
+    ShelfGapResponse, StalledProductResponse, UnknownKeyResponse,
     StockCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockPointResponse, StockVisitCreate, StockVisitItemInput, StockVisitItemResponse,
     StockVisitResponse, StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
@@ -179,9 +181,19 @@ class MerchandisingService:
         series, _, hoje = await MerchandisingService._stock_series(
             session, tenant_id, EXPIRY_WINDOW_DAYS, customer_id
         )
+        desde = date.fromisoformat(hoje) - timedelta(days=EXPIRY_WINDOW_DAYS)
+
         coletadas = await Repo.list_expiries_for_customer(
-            session, tenant_id, customer_id,
-            date.fromisoformat(hoje) - timedelta(days=EXPIRY_WINDOW_DAYS),
+            session, tenant_id, customer_id, desde
+        )
+        # As notas emitidas para este cliente (planilha do administrador) e o
+        # vencido que o promotor retirou. Sem nenhuma das duas, o razão de lotes
+        # cai sozinho no comportamento de antes — não há ramo especial aqui.
+        entradas = await Repo.list_deliveries_for_customer(
+            session, tenant_id, customer_id, desde
+        )
+        retiradas = await Repo.list_removals_for_customer(
+            session, tenant_id, customer_id, desde
         )
 
         avisos = expiry.forecasts(
@@ -193,12 +205,175 @@ class MerchandisingService:
                 }
                 for chave, por_dia in coletadas.items()
             },
+            entradas,
+            retiradas,
         )
         return {
             product_id: veredito
             for (_, product_id), veredito in avisos.items()
             if veredito.alert
         }
+
+    # ── Planilha de faturamento ───────────────────────────────────────────
+
+    @staticmethod
+    async def import_invoices(
+        session: AsyncSession, tenant_id: UUID, content: bytes, save: bool
+    ) -> InvoiceImportResponse:
+        """Lê a planilha do ERP e grava as entradas de mercadoria.
+
+        `save=False` é a prévia: lê, casa com o cadastro e relata, sem tocar no
+        banco. É o modo em que a tela abre — anexar um arquivo errado não pode
+        sujar a base antes de alguém olhar.
+
+        LINHA QUE NÃO CASA NÃO É ERRO, É TAREFA
+        ---------------------------------------
+        Produto ou cliente que a planilha traz e o cadastro não conhece sai na
+        resposta com quanto ficou de fora. O administrador vincula o código e
+        anexa de novo — a importação é idempotente pela chave da venda, então
+        reanexar o mesmo arquivo não duplica o que já entrou.
+        """
+        lido = invoices.parse(content)
+        if lido.missing_columns:
+            return InvoiceImportResponse(missing_columns=lido.missing_columns)
+
+        produtos = await Repo.products_by_sku(session, tenant_id)
+        clientes = await Repo.customers_by_document(session, tenant_id)
+
+        entradas: list[ProductDelivery] = []
+        # código → (nome, linhas, quantidade) do que ficou de fora
+        sem_produto: dict[str, list] = {}
+        sem_cliente: dict[str, list] = {}
+
+        for linha in lido.rows:
+            product_id = produtos.get(linha.product_code)
+            customer_id = clientes.get(linha.customer_document)
+
+            if product_id is None:
+                falta = sem_produto.setdefault(
+                    linha.product_code, [linha.product_name, 0, 0.0, None]
+                )
+                falta[1] += 1
+                falta[2] += linha.quantity
+            if customer_id is None:
+                falta = sem_cliente.setdefault(
+                    linha.customer_code,
+                    [linha.customer_name, 0, 0.0, linha.customer_document],
+                )
+                falta[1] += 1
+                falta[2] += linha.quantity
+            if product_id is None or customer_id is None:
+                continue
+
+            entradas.append(
+                ProductDelivery(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    customer_id=customer_id,
+                    product_id=product_id,
+                    issued_on=linha.issued_on,
+                    quantity=Decimal(str(linha.quantity)),
+                    company=linha.company,
+                    sale_number=linha.sale_number,
+                    invoice=linha.invoice,
+                    cfop=linha.cfop,
+                )
+            )
+
+        if save:
+            await Repo.replace_deliveries(session, tenant_id, entradas)
+
+        desconhecidos = lambda faltas: sorted(  # noqa: E731
+            (
+                UnknownKeyResponse(
+                    code=codigo, name=nome or "—", document=documento,
+                    lines=linhas, quantity=Decimal(str(round(quanto, 3))),
+                )
+                for codigo, (nome, linhas, quanto, documento) in faltas.items()
+            ),
+            key=lambda u: -u.lines,
+        )
+
+        return InvoiceImportResponse(
+            total_lines=lido.total,
+            usable_lines=len(lido.rows),
+            ignored_cfop=lido.ignored_cfop,
+            ignored_incomplete=lido.ignored_incomplete,
+            first_day=lido.first_day,
+            last_day=lido.last_day,
+            matched_lines=len(entradas),
+            matched_quantity=Decimal(str(round(sum(float(e.quantity) for e in entradas), 3))),
+            saved=save,
+            unknown_customers=desconhecidos(sem_cliente),
+            unknown_products=desconhecidos(sem_produto),
+        )
+
+    # ── Vencido retirado da loja ──────────────────────────────────────────
+
+    @staticmethod
+    async def register_removal(
+        session: AsyncSession, tenant_id: UUID, user: User,
+        payload: ProductRemovalCreate,
+    ) -> list[ProductRemovalResponse]:
+        """Grava o que o promotor retirou por vencimento neste cliente.
+
+        Substitui pelo `client_uuid`, como as contagens: o reenvio da fila
+        offline atualiza em vez de duplicar. Lista vazia apaga a retirada — é
+        assim que o promotor desfaz um registro feito por engano.
+        """
+        await MerchandisingService._assert_can_access_customer(
+            session, tenant_id, user, payload.customer_id
+        )
+
+        quando = payload.removed_at or datetime.now(timezone.utc)
+        dia = date.fromisoformat(consolidation.local_day(quando))
+
+        sizes = await Repo.package_sizes(
+            session, tenant_id, [item.product_id for item in payload.items]
+        )
+        linhas = [
+            ProductRemoval(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                customer_id=payload.customer_id,
+                product_id=item.product_id,
+                promoter_id=user.id,
+                removed_day=dia,
+                expires_at=item.expires_at,
+                boxes=item.boxes,
+                units=item.units,
+                quantity=item.boxes * sizes.get(item.product_id, Decimal(1)) + item.units,
+                client_uuid=payload.client_uuid,
+            )
+            for item in payload.items
+        ]
+
+        await Repo.replace_removals(
+            session, tenant_id, payload.client_uuid or str(uuid4()), linhas
+        )
+        return await MerchandisingService.list_removals(
+            session, tenant_id, user, payload.customer_id, dia
+        )
+
+    @staticmethod
+    async def list_removals(
+        session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
+        day: date,
+    ) -> list[ProductRemovalResponse]:
+        await MerchandisingService._assert_can_access_customer(
+            session, tenant_id, user, customer_id
+        )
+        return [
+            ProductRemovalResponse(
+                id=linha.id, customer_id=linha.customer_id,
+                product_id=linha.product_id, product_name=nome,
+                removed_day=linha.removed_day, expires_at=linha.expires_at,
+                boxes=linha.boxes, units=linha.units, quantity=linha.quantity,
+            )
+            for linha, nome in await Repo.list_removals_by_day(
+                session, tenant_id, customer_id, day
+            )
+        ]
 
     @staticmethod
     async def visit_sheet(

@@ -11,6 +11,8 @@ const TOTAIS_KEY = 'estoque_totais'
 // A coleta de vencimento retida: a contagem que não subiu porque falta digitar
 // as datas.
 const VENCIMENTOS_KEY = 'estoque_vencimentos'
+// O vencido que o promotor retirou da loja, ainda em digitação.
+const RETIRADAS_KEY = 'estoque_retiradas'
 
 const load = (key) => JSON.parse(localStorage.getItem(key) || '{}')
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value))
@@ -99,6 +101,8 @@ export const useVisitaStore = defineStore('visita', () => {
   const totais = ref(dropOldMarks(load(TOTAIS_KEY)))
   // { [customerId]: { dia, visit_type, produtos: [...], linhas: {...} } }
   const vencimentos = ref(dropOldMarks(load(VENCIMENTOS_KEY)))
+  // { [customerId]: { dia, client_uuid, linhas: [{product_id, texto, boxes, units}] } }
+  const retiradas = ref(dropOldMarks(load(RETIRADAS_KEY)))
   const sending = ref(false)
 
   const persist = () => {
@@ -106,6 +110,7 @@ export const useVisitaStore = defineStore('visita', () => {
     save(DONE_KEY, concluidas.value)
     save(TOTAIS_KEY, totais.value)
     save(VENCIMENTOS_KEY, vencimentos.value)
+    save(RETIRADAS_KEY, retiradas.value)
     localStorage.setItem(QUEUE_KEY, JSON.stringify(queue.value))
   }
 
@@ -277,6 +282,65 @@ export const useVisitaStore = defineStore('visita', () => {
     persist()
   }
 
+  // ── Vencido retirado da loja ────────────────────────────────────────────
+
+  /**
+   * O rascunho da retirada de hoje neste cliente.
+   *
+   * Um `client_uuid` por retirada, não por linha: o servidor substitui o
+   * conjunto inteiro quando a fila offline reenvia, então corrigir uma linha e
+   * mandar de novo não deixa a versão antiga para trás.
+   */
+  function getRetirada(customerId) {
+    const atual = deHoje(retiradas, customerId)
+    if (atual) return atual
+
+    retiradas.value[customerId] = {
+      dia: diaLocal(),
+      client_uuid: newUuid(),
+      removed_at: new Date().toISOString(),
+      linhas: [],
+    }
+    persist()
+    return retiradas.value[customerId]
+  }
+
+  function setLinhasRetirada(customerId, linhas) {
+    getRetirada(customerId).linhas = linhas
+    persist()
+  }
+
+  const retiradaPendente = (customerId) => deHoje(retiradas, customerId)
+
+  function clearRetirada(customerId) {
+    delete retiradas.value[customerId]
+    persist()
+  }
+
+  /** Fecha a retirada: tenta enviar; se falhar, enfileira. Lista vazia é um
+   *  envio legítimo — é assim que o promotor desfaz o que registrou por engano. */
+  async function submitRetirada(customerId, items) {
+    const rascunho = getRetirada(customerId)
+    const payload = {
+      tipo: 'retirada',
+      customer_id: customerId,
+      client_uuid: rascunho.client_uuid,
+      removed_at: rascunho.removed_at,
+      items,
+    }
+
+    try {
+      await merchandisingApi.saveRemoval(payload)
+      clearRetirada(customerId)
+      return { sent: true }
+    } catch (error) {
+      queue.value.push(payload)
+      clearRetirada(customerId)
+      persist()
+      return { sent: false, error }
+    }
+  }
+
   // ── Envio ───────────────────────────────────────────────────────────────
 
   /**
@@ -338,11 +402,19 @@ export const useVisitaStore = defineStore('visita', () => {
 
     for (const payload of queue.value) {
       try {
-        await merchandisingApi.saveVisit(payload)
+        // A fila carrega contagens e retiradas de vencido. O tipo só existe nas
+        // segundas: payload antigo, gravado antes desta versão, é contagem.
+        if (payload.tipo === 'retirada') {
+          await merchandisingApi.saveRemoval(payload)
+        } else {
+          await merchandisingApi.saveVisit(payload)
+        }
         sent += 1
         // Só tira o "aguardando envio" se a marca for de hoje: contagem de
         // ontem que subiu agora não acende o concluído de hoje.
-        const marca = marcaDeHoje(payload.customer_id, payload.visit_type)
+        const marca = payload.visit_type
+          ? marcaDeHoje(payload.customer_id, payload.visit_type)
+          : null
         if (marca) marca.pendente = false
       } catch (error) {
         // 4xx é erro de dados (cliente removido, contagem já exportada): reenviar
@@ -363,10 +435,11 @@ export const useVisitaStore = defineStore('visita', () => {
   }
 
   return {
-    drafts, queue, concluidas, totais, vencimentos, sending, pendingCount,
+    drafts, queue, concluidas, totais, vencimentos, retiradas, sending, pendingCount,
     getDraft, setItem, setSemProdutos, itemsCount, clearDraft, submit, flushQueue,
     marcarConcluida, concluidaHoje, aguardandoEnvio,
     pendenciaDeVencimento, abrirVencimento, vencimentoPendente,
     setLinhasVencimento, fecharVencimento,
+    getRetirada, setLinhasRetirada, retiradaPendente, clearRetirada, submitRetirada,
   }
 })

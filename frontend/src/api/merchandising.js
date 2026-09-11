@@ -60,7 +60,43 @@ export const merchandisingApi = {
     return data
   },
 
+  /** Registra o vencido que o promotor retirou da loja. Idempotente pelo
+   *  client_uuid, como as contagens. */
+  async saveRemoval(payload) {
+    const { data } = await apiClient.post('/merchandising/removals', payload, {
+      timeout: 30000,
+    })
+    return data
+  },
+
+  /** O que já foi retirado neste cliente hoje. */
+  async removals(customerId, day) {
+    const { data } = await apiClient.get(
+      `/merchandising/customers/${customerId}/removals`,
+      { params: normalizeParams({ day }) }
+    )
+    return data
+  },
+
   // ── Administrador ─────────────────────────────────────────────────────
+
+  /**
+   * Planilha de faturamento do ERP.
+   *
+   * `preview` lê e relata sem gravar nada — é o que acontece ao anexar, para o
+   * administrador conferir antes de confirmar. `import` grava.
+   *
+   * Timeout largo: são milhares de linhas por arquivo, e o servidor ainda casa
+   * cada uma com o cadastro antes de responder.
+   */
+  async previewInvoices(file) {
+    return enviarPlanilha('/merchandising/invoices/preview', file)
+  },
+
+  async importInvoices(file) {
+    return enviarPlanilha('/merchandising/invoices/import', file)
+  },
+
 
   /** Os indicadores de evolução do estoque: parados, sumidos, voltados e
    *  gôndola vazia com saldo no depósito. Tudo é variação entre contagens —
@@ -132,6 +168,20 @@ export const merchandisingApi = {
       product_ids: productIds,
     })
   },
+}
+
+/** POST multipart da planilha, com o `detail` do servidor já legível. */
+async function enviarPlanilha(url, file) {
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    const { data } = await apiClient.post(url, form, { timeout: 120000 })
+    return data
+  } catch (error) {
+    throw new Error(
+      error.response?.data?.detail || 'Não foi possível ler a planilha.'
+    )
+  }
 }
 
 /**

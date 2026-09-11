@@ -5,11 +5,12 @@ from decimal import Decimal
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, delete, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.customer import Customer, CustomerStatus
 from app.infrastructure.persistence.models.customer_product import CustomerProduct
+from app.infrastructure.persistence.models.delivery import ProductDelivery, ProductRemoval
 from app.infrastructure.persistence.models.product import Product
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.promoter_customer import PromoterCustomer
@@ -256,6 +257,144 @@ class MerchandisingRepository:
         for expiry in expiries:
             session.add(expiry)
         await session.commit()
+
+    @staticmethod
+    async def products_by_sku(
+        session: AsyncSession, tenant_id: UUID
+    ) -> dict[str, UUID]:
+        """Código do ERP → id do produto aqui. Produto sem código fica de fora."""
+        query = select(Product.sku, Product.id).where(
+            Product.tenant_id == tenant_id, Product.sku.isnot(None)
+        )
+        return {
+            sku.strip(): product_id
+            for sku, product_id in (await session.execute(query)).all()
+            if sku and sku.strip()
+        }
+
+    @staticmethod
+    async def customers_by_document(
+        session: AsyncSession, tenant_id: UUID
+    ) -> dict[str, UUID]:
+        """CNPJ/CPF (só dígitos) → id do cliente aqui."""
+        query = select(Customer.document, Customer.id).where(
+            Customer.tenant_id == tenant_id, Customer.document.isnot(None)
+        )
+        return {
+            documento.strip(): customer_id
+            for documento, customer_id in (await session.execute(query)).all()
+            if documento and documento.strip()
+        }
+
+    @staticmethod
+    async def replace_deliveries(
+        session: AsyncSession, tenant_id: UUID, deliveries: list[ProductDelivery]
+    ) -> None:
+        """Grava as entradas, substituindo as que já tinham a mesma chave.
+
+        Anexar a planilha de ontem de novo não duplica nada: a chave é
+        (empresa, nº venda, produto), e uma linha corrigida no ERP sobrescreve a
+        que estava aqui.
+        """
+        if not deliveries:
+            return
+
+        chaves = {(d.company, d.sale_number, d.product_id) for d in deliveries}
+        await session.execute(
+            delete(ProductDelivery).where(
+                ProductDelivery.tenant_id == tenant_id,
+                tuple_(
+                    ProductDelivery.company,
+                    ProductDelivery.sale_number,
+                    ProductDelivery.product_id,
+                ).in_(list(chaves)),
+            )
+        )
+        for linha in deliveries:
+            session.add(linha)
+        await session.commit()
+
+    @staticmethod
+    async def list_deliveries_for_customer(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
+    ) -> dict[tuple[UUID, UUID], list[tuple[date, float]]]:
+        """O que foi faturado para este cliente, por produto — `(emissão, peças)`.
+
+        É nesta forma que o razão de lotes consome: cada nota abre um lote na
+        data em que foi emitida.
+        """
+        query = select(
+            ProductDelivery.product_id,
+            ProductDelivery.issued_on,
+            ProductDelivery.quantity,
+        ).where(
+            ProductDelivery.tenant_id == tenant_id,
+            ProductDelivery.customer_id == customer_id,
+            ProductDelivery.issued_on >= since,
+        )
+
+        agrupado: dict[tuple[UUID, UUID], list[tuple[date, float]]] = {}
+        for product_id, emitida, quantidade in (await session.execute(query)).all():
+            agrupado.setdefault((customer_id, product_id), []).append(
+                (emitida, float(quantidade))
+            )
+        return agrupado
+
+    @staticmethod
+    async def list_removals_for_customer(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
+    ) -> dict[tuple[UUID, UUID], list[tuple[date, date, float]]]:
+        """O vencido retirado neste cliente — `(dia da retirada, data lida, peças)`."""
+        query = select(
+            ProductRemoval.product_id,
+            ProductRemoval.removed_day,
+            ProductRemoval.expires_at,
+            ProductRemoval.quantity,
+        ).where(
+            ProductRemoval.tenant_id == tenant_id,
+            ProductRemoval.customer_id == customer_id,
+            ProductRemoval.removed_day >= since,
+        )
+
+        agrupado: dict[tuple[UUID, UUID], list[tuple[date, date, float]]] = {}
+        for product_id, retirado, vencia, quantidade in (await session.execute(query)).all():
+            agrupado.setdefault((customer_id, product_id), []).append(
+                (retirado, vencia, float(quantidade))
+            )
+        return agrupado
+
+    @staticmethod
+    async def replace_removals(
+        session: AsyncSession, tenant_id: UUID, client_uuid: str,
+        removals: list[ProductRemoval],
+    ) -> None:
+        """Troca as linhas de uma retirada. Reenvio offline substitui, não duplica."""
+        await session.execute(
+            delete(ProductRemoval).where(
+                ProductRemoval.tenant_id == tenant_id,
+                ProductRemoval.client_uuid == client_uuid,
+            )
+        )
+        for linha in removals:
+            session.add(linha)
+        await session.commit()
+
+    @staticmethod
+    async def list_removals_by_day(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, day: date
+    ) -> Sequence[tuple[ProductRemoval, Optional[str]]]:
+        """As retiradas de um cliente num dia, com o nome do produto."""
+        query = (
+            select(ProductRemoval, Product.name)
+            .join(Product, Product.id == ProductRemoval.product_id, isouter=True)
+            .where(
+                ProductRemoval.tenant_id == tenant_id,
+                ProductRemoval.customer_id == customer_id,
+                ProductRemoval.removed_day == day,
+            )
+            .order_by(ProductRemoval.expires_at)
+        )
+        return (await session.execute(query)).all()
 
     @staticmethod
     async def list_expiries_for_customer(

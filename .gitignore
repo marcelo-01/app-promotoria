@@ -17,3 +17,9 @@ backend/uploads/
 
 # Dumps gerados por `make prod-backup` — nunca versionar, é o banco inteiro
 backups/
+
+# Planilhas de faturamento anexadas para teste. Trazem nome, CNPJ e valores de
+# cliente real — versionar seria colocar dado de cliente no histórico do git,
+# de onde não sai mais.
+*.xlsx
+*.xlsm

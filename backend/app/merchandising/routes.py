@@ -1,8 +1,10 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import (
+    APIRouter, Depends, File, HTTPException, Query, UploadFile, status,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_roles
@@ -11,10 +13,15 @@ from app.infrastructure.persistence.session import get_db_session
 from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, PromoterCustomerResponse,
+    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, InvoiceImportResponse,
+    ProductRemovalCreate, ProductRemovalResponse, PromoterCustomerResponse,
     StockHistoryResponse, StockInsightsResponse, StockVisitCreate,
     StockVisitListResponse, StockVisitResponse, StockVisitUpdate, VisitPairListResponse,
 )
+
+# A planilha do ERP é grande, mas não é ilimitada: um arquivo muito maior que
+# isto é engano de anexo, e ler 200 MB de Excel derruba o contêiner.
+_MAX_PLANILHA = 25 * 1024 * 1024
 from app.merchandising.service import MerchandisingService
 
 router = APIRouter(prefix="/merchandising", tags=["merchandising"])
@@ -302,3 +309,92 @@ async def set_customer_mix(
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
     await Repo.replace_mix(session, context["tenant_id"], customer_id, payload.product_ids)
+
+
+# ─── Vencido retirado da loja (promotor) ──────────────────────────────────────
+
+@router.post("/removals", response_model=list[ProductRemovalResponse])
+async def register_removal(
+    payload: ProductRemovalCreate,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_FIELD)),
+):
+    """Registra o vencido que o promotor tirou da gôndola.
+
+    Idempotente pelo `client_uuid`, como as contagens: a fila offline pode
+    reenviar a mesma retirada quantas vezes for preciso.
+    """
+    return await MerchandisingService.register_removal(
+        session, context["tenant_id"], context["user"], payload
+    )
+
+
+@router.get("/customers/{customer_id}/removals", response_model=list[ProductRemovalResponse])
+async def list_removals(
+    customer_id: UUID,
+    day: Optional[date] = Query(default=None, description="Dia local; padrão, hoje"),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_FIELD)),
+):
+    from app.merchandising import consolidation
+
+    quando = day or date.fromisoformat(
+        consolidation.local_day(datetime.now(timezone.utc))
+    )
+    return await MerchandisingService.list_removals(
+        session, context["tenant_id"], context["user"], customer_id, quando
+    )
+
+
+# ─── Planilha de faturamento (administrador) ──────────────────────────────────
+
+@router.post("/invoices/preview", response_model=InvoiceImportResponse)
+async def preview_invoices(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    """Lê a planilha e relata, SEM gravar nada.
+
+    É o que a tela faz ao anexar: mostra o período, quanto casou e o que ficou
+    de fora, para o administrador conferir antes de confirmar.
+    """
+    return await MerchandisingService.import_invoices(
+        session, context["tenant_id"], await _ler_planilha(file), save=False
+    )
+
+
+@router.post("/invoices/import", response_model=InvoiceImportResponse)
+async def import_invoices(
+    file: UploadFile = File(...),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    """Grava as entradas de mercadoria da planilha.
+
+    Idempotente pela chave (empresa, nº venda, item): anexar o mesmo arquivo de
+    novo não duplica, e uma linha corrigida no ERP sobrescreve a anterior.
+    """
+    return await MerchandisingService.import_invoices(
+        session, context["tenant_id"], await _ler_planilha(file), save=True
+    )
+
+
+async def _ler_planilha(file: UploadFile) -> bytes:
+    """Confere extensão e tamanho antes de deixar o openpyxl abrir o arquivo."""
+    nome = (file.filename or "").lower()
+    if not nome.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(
+            status_code=422,
+            detail="Envie a planilha em .xlsx — o formato antigo .xls não é lido.",
+        )
+
+    conteudo = await file.read()
+    if len(conteudo) > _MAX_PLANILHA:
+        raise HTTPException(
+            status_code=413,
+            detail="Planilha grande demais (limite de 25 MB).",
+        )
+    if not conteudo:
+        raise HTTPException(status_code=422, detail="O arquivo chegou vazio.")
+    return conteudo

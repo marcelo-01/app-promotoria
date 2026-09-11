@@ -38,6 +38,7 @@ class CustomersService:
             id=uuid4(),
             tenant_id=tenant_id,
             name=payload.name,
+            document=payload.document,
             status=CustomerStatus.ACTIVE,
         )
         return await Repo.save(session, customer)
@@ -57,7 +58,9 @@ class CustomersService:
                 raise HTTPException(status_code=422, detail="Status inválido")
 
         for key, value in data.items():
-            if value is not None:
+            # `document` pode voltar a ficar em branco: mandar null nele apaga o
+            # vínculo com a planilha, em vez de ser lido como "não mexi".
+            if value is not None or key == "document":
                 setattr(customer, key, value)
 
         return await Repo.save(session, customer)

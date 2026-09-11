@@ -74,6 +74,87 @@ class CountSheetResponse(BaseModel):
     products: List[CountProductResponse] = []
 
 
+# ─── Planilha de faturamento ──────────────────────────────────────────────────
+
+
+class UnknownKeyResponse(BaseModel):
+    """Um código da planilha que não existe no cadastro deste app.
+
+    É a lista de trabalho da tela: cada linha aqui é mercadoria que entrou num
+    cliente e o sistema não conseguiu contabilizar. Vem com quanto ficou de fora
+    justamente para o administrador saber o que ignorar e o que vincular.
+    """
+
+    code: str
+    name: str
+    document: Optional[str] = None     # só nos clientes
+    lines: int
+    quantity: Decimal
+
+
+class InvoiceImportResponse(BaseModel):
+    """O relato de uma planilha lida — igual na prévia e na importação."""
+
+    # Só preenchido quando o arquivo não tem as colunas esperadas. Nesse caso
+    # nada mais vem: não dá para relatar sobre um arquivo que não foi entendido.
+    missing_columns: List[str] = []
+
+    total_lines: int = 0
+    # Linhas de saída de mercadoria, já limpas
+    usable_lines: int = 0
+    # Devolução e outras entradas (CFOP que não começa em 5 ou 6). Ficam de fora
+    # de propósito: a devolução só é lançada no ERP quando a mercadoria volta ao
+    # estoque, dias depois, e para esta conta isso chega tarde demais.
+    ignored_cfop: int = 0
+    ignored_incomplete: int = 0
+
+    first_day: Optional[date] = None
+    last_day: Optional[date] = None
+
+    # Linhas que casaram com cliente E produto do cadastro
+    matched_lines: int = 0
+    matched_quantity: Decimal = Decimal(0)
+    # true = gravado; false = foi só prévia
+    saved: bool = False
+
+    unknown_customers: List[UnknownKeyResponse] = []
+    unknown_products: List[UnknownKeyResponse] = []
+
+
+# ─── Vencido retirado da loja ─────────────────────────────────────────────────
+
+
+class ProductRemovalInput(BaseModel):
+    """Uma retirada: produto, a data lida na embalagem, e quanto saiu."""
+
+    product_id: UUID
+    expires_at: date
+    boxes: Decimal = Field(default=Decimal(0), ge=0)
+    units: Decimal = Field(default=Decimal(0), ge=0)
+
+
+class ProductRemovalCreate(BaseModel):
+    customer_id: UUID
+    # UUID gerado no aparelho, um por retirada — reenvio offline substitui
+    client_uuid: Optional[str] = Field(default=None, max_length=64)
+    removed_at: Optional[datetime] = None
+    items: List[ProductRemovalInput] = []
+
+
+class ProductRemovalResponse(BaseModel):
+    id: UUID
+    customer_id: UUID
+    product_id: UUID
+    product_name: Optional[str] = None
+    removed_day: date
+    expires_at: date
+    boxes: Decimal = Decimal(0)
+    units: Decimal = Decimal(0)
+    quantity: Decimal = Decimal(0)
+
+    model_config = {"from_attributes": True}
+
+
 # ─── Visita / contagem ────────────────────────────────────────────────────────
 
 

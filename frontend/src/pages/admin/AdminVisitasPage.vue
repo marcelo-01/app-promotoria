@@ -156,6 +156,28 @@
         </div>
 
         <div v-else style="max-height: 60vh; overflow-y: auto">
+          <!-- O que saiu de circulação naquele dia. Vem antes de tudo porque
+               muda a leitura dos números abaixo: sem isto, o estoque que caiu
+               por causa do lixo seria lido como venda. -->
+          <q-card-section v-if="retirados.length" class="q-pb-xs">
+            <q-chip dense square outline color="red-8" icon="delete_sweep">
+              Vencidos retirados da loja
+            </q-chip>
+            <q-list separator dense>
+              <q-item v-for="linha in retirados" :key="linha.id">
+                <q-item-section>
+                  <q-item-label>{{ linha.product_name || 'Produto removido' }}</q-item-label>
+                  <q-item-label caption>
+                    vencia {{ formatDia(linha.expires_at) }}
+                  </q-item-label>
+                </q-item-section>
+                <q-item-section side class="text-weight-bold text-red-8">
+                  {{ formatQtd(linha.quantity) }} un
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-card-section>
+
           <!-- As datas coletadas vêm ANTES dos dois lados: são do par inteiro,
                não de um lugar só, e são o motivo pelo qual esta visita rendeu uma
                ação de escoamento. -->
@@ -297,6 +319,8 @@ async function carregar(props) {
   }
 }
 
+const retirados = computed(() => detalhe.value?.retiradas || [])
+
 /**
  * As datas coletadas na visita — as dos dois lados juntas, da mais próxima de
  * vencer para a mais distante.
@@ -339,14 +363,17 @@ const recarregar = () =>
 /** Os itens dos dois lados, buscados em paralelo: a linha da tela traz só as
  *  contagens, e o detalhe é a única tela que precisa dos produtos. */
 async function abrirDetalhe(linha) {
-  detalhe.value = { linha, gondola: null, estoque: null, carregando: true }
+  detalhe.value = { linha, gondola: null, estoque: null, retiradas: [], carregando: true }
   detalheAberto.value = true
   try {
-    const [gondola, estoque] = await Promise.all([
+    // As retiradas não pertencem a nenhum dos dois lados — são da loja no dia,
+    // e por isso vêm por cliente + dia, e não pelo id da contagem.
+    const [gondola, estoque, retiradas] = await Promise.all([
       linha.gondola ? merchandisingApi.visit(linha.gondola.visit_id) : null,
       linha.estoque ? merchandisingApi.visit(linha.estoque.visit_id) : null,
+      merchandisingApi.removals(linha.customer_id, linha.day).catch(() => []),
     ])
-    detalhe.value = { linha, gondola, estoque, carregando: false }
+    detalhe.value = { linha, gondola, estoque, retiradas, carregando: false }
   } catch (error) {
     detalheAberto.value = false
     $q.notify({

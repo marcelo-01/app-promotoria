@@ -23,6 +23,14 @@ export const promotorRoutes = [
         props: true,
       },
       {
+        // Vencido retirado da loja. Não distingue gôndola de estoque: é da loja
+        // inteira, e acontece antes da contagem.
+        path: 'clientes/:customerId/vencidos',
+        name: 'PromotorVencidos',
+        component: () => import('@/pages/promotor/PromotorVencidosPage.vue'),
+        props: true,
+      },
+      {
         // A coleta que segura a contagem. Sem `visitType` na URL: a pendência é
         // do CLIENTE (o total é do par gôndola + estoque), e qual dos dois lados
         // está retido fica guardado no aparelho.
@@ -65,6 +73,11 @@ export const adminRoutes = [
         path: 'visitas',
         name: 'AdminVisitas',
         component: () => import('@/pages/admin/AdminVisitasPage.vue'),
+      },
+      {
+        path: 'faturamento',
+        name: 'AdminFaturamento',
+        component: () => import('@/pages/admin/AdminFaturamentoPage.vue'),
       },
       {
         path: 'vinculos',

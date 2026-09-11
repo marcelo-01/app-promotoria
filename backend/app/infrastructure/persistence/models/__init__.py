@@ -5,6 +5,10 @@ from app.infrastructure.persistence.models.customer import Customer, CustomerSta
 from app.infrastructure.persistence.models.product import Product  # noqa: F401
 from app.infrastructure.persistence.models.promoter_customer import PromoterCustomer  # noqa: F401
 from app.infrastructure.persistence.models.customer_product import CustomerProduct  # noqa: F401
+from app.infrastructure.persistence.models.delivery import (  # noqa: F401
+    ProductDelivery,
+    ProductRemoval,
+)
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry  # noqa: F401
 from app.infrastructure.persistence.models.stock_visit import (  # noqa: F401
     StockVisit,
