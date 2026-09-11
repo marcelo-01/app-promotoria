@@ -85,6 +85,15 @@ COLUNAS_BRINDE = {
 
 COLUNAS = {"venda": COLUNAS_VENDA, "brinde": COLUNAS_BRINDE}
 
+# Colunas que podem ou não estar no arquivo. A de brindes vai passar a sair com
+# contagem de peças; enquanto não sair, vale o desencalhe do `_pecas` abaixo.
+# Mais de um nome por campo porque o título exato depende de como o relatório for
+# configurado no ERP, e não vale quebrar a importação por causa de um acento.
+COLUNAS_OPCIONAIS = {
+    "venda": {},
+    "brinde": {"pieces": ("N. PEÇAS", "PEÇAS", "QUANTIDADE PEÇAS")},
+}
+
 # ── O que entra de cada planilha ──────────────────────────────────────────
 #
 # FATURAMENTO: só saída de mercadoria. CFOP de venda começa em 5 (dentro do
@@ -212,7 +221,8 @@ def _pecas(valor, kind: str) -> Optional[float]:
     o tamanho do buraco. Descartar subestima a entrada, o que subestima a venda,
     o que provoca aviso A MAIS — o lado seguro do erro.
 
-    A correção de verdade é pedir `N. PEÇAS` também na exportação de brindes.
+    A saída definitiva é o relatório trazer a contagem de peças — e quando ela
+    vier, `COLUNAS_OPCIONAIS` a encontra e esta função sai do caminho.
     """
     numero = _numero(valor)
     if numero is None:
@@ -256,6 +266,15 @@ def parse(content: bytes, kind: str = "venda") -> Parsed:
     if faltando:
         return Parsed(missing_columns=faltando)
 
+    # Contagem de peças, quando o relatório trouxer: é ela que manda, e aí não há
+    # peso disfarçado de quantidade nem linha descartada.
+    for campo, apelidos in COLUNAS_OPCIONAIS[kind].items():
+        for apelido in apelidos:
+            i = posicao.get(_chave(apelido))
+            if i is not None:
+                indices[campo] = i
+                break
+
     saida = Parsed()
     for linha in linhas:
         pega = lambda campo: linha[indices[campo]] if campo in indices else None  # noqa: E731
@@ -276,7 +295,11 @@ def parse(content: bytes, kind: str = "venda") -> Parsed:
             saida.ignored_incomplete += 1
             continue
 
-        quantidade = _pecas(pega("quantity"), kind)
+        # Com coluna de peças, é ela; sem, resta desencalhar a quantidade.
+        if "pieces" in indices:
+            quantidade = _numero(pega("pieces"))
+        else:
+            quantidade = _pecas(pega("quantity"), kind)
         if quantidade is None:
             # Peso disfarçado de quantidade: não vira peça, e não se chuta.
             saida.ignored_weight += 1
