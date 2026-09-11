@@ -315,53 +315,52 @@ class MerchandisingRepository:
         await session.commit()
 
     @staticmethod
-    async def list_deliveries_for_customer(
-        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
-    ) -> dict[tuple[UUID, UUID], list[tuple[date, float]]]:
-        """O que foi faturado para este cliente, por produto — `(emissão, peças)`.
+    async def sum_deliveries_in_cycle(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID,
+        after: date, until: date, kind: str,
+    ) -> dict[UUID, float]:
+        """O que entrou neste cliente DENTRO do ciclo, somado por produto.
 
-        É nesta forma que o razão de lotes consome: cada nota abre um lote na
-        data em que foi emitida.
+        A janela é aberta no início e fechada no fim: a nota emitida no dia da
+        contagem anterior já está refletida naquela contagem, e contá-la de novo
+        inflaria a venda do ciclo seguinte.
         """
-        query = select(
-            ProductDelivery.product_id,
-            ProductDelivery.issued_on,
-            ProductDelivery.quantity,
-        ).where(
-            ProductDelivery.tenant_id == tenant_id,
-            ProductDelivery.customer_id == customer_id,
-            ProductDelivery.issued_on >= since,
-        )
-
-        agrupado: dict[tuple[UUID, UUID], list[tuple[date, float]]] = {}
-        for product_id, emitida, quantidade in (await session.execute(query)).all():
-            agrupado.setdefault((customer_id, product_id), []).append(
-                (emitida, float(quantidade))
+        query = (
+            select(ProductDelivery.product_id, func.sum(ProductDelivery.quantity))
+            .where(
+                ProductDelivery.tenant_id == tenant_id,
+                ProductDelivery.customer_id == customer_id,
+                ProductDelivery.kind == kind,
+                ProductDelivery.issued_on > after,
+                ProductDelivery.issued_on <= until,
             )
-        return agrupado
+            .group_by(ProductDelivery.product_id)
+        )
+        return {
+            product_id: float(total or 0)
+            for product_id, total in (await session.execute(query)).all()
+        }
 
     @staticmethod
-    async def list_removals_for_customer(
-        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
-    ) -> dict[tuple[UUID, UUID], list[tuple[date, date, float]]]:
-        """O vencido retirado neste cliente — `(dia da retirada, data lida, peças)`."""
-        query = select(
-            ProductRemoval.product_id,
-            ProductRemoval.removed_day,
-            ProductRemoval.expires_at,
-            ProductRemoval.quantity,
-        ).where(
-            ProductRemoval.tenant_id == tenant_id,
-            ProductRemoval.customer_id == customer_id,
-            ProductRemoval.removed_day >= since,
-        )
-
-        agrupado: dict[tuple[UUID, UUID], list[tuple[date, date, float]]] = {}
-        for product_id, retirado, vencia, quantidade in (await session.execute(query)).all():
-            agrupado.setdefault((customer_id, product_id), []).append(
-                (retirado, vencia, float(quantidade))
+    async def sum_removals_in_cycle(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID,
+        after: date, until: date,
+    ) -> dict[UUID, float]:
+        """O vencido retirado dentro do ciclo, somado por produto."""
+        query = (
+            select(ProductRemoval.product_id, func.sum(ProductRemoval.quantity))
+            .where(
+                ProductRemoval.tenant_id == tenant_id,
+                ProductRemoval.customer_id == customer_id,
+                ProductRemoval.removed_day > after,
+                ProductRemoval.removed_day <= until,
             )
-        return agrupado
+            .group_by(ProductRemoval.product_id)
+        )
+        return {
+            product_id: float(total or 0)
+            for product_id, total in (await session.execute(query)).all()
+        }
 
     @staticmethod
     async def replace_removals(
@@ -395,32 +394,6 @@ class MerchandisingRepository:
             .order_by(ProductRemoval.expires_at)
         )
         return (await session.execute(query)).all()
-
-    @staticmethod
-    async def list_expiries_for_customer(
-        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
-    ) -> dict[tuple[UUID, UUID], dict[str, list[tuple[date, Decimal]]]]:
-        """Datas já coletadas neste cliente, agrupadas por produto e por dia.
-
-        É neste formato que o razão de lotes as consome: no dia de uma coleta ele
-        troca a fila estimada pelo que o promotor leu na embalagem.
-        """
-        query = select(
-            ProductExpiry.product_id,
-            ProductExpiry.collected_day,
-            ProductExpiry.expires_at,
-            ProductExpiry.quantity,
-        ).where(
-            ProductExpiry.tenant_id == tenant_id,
-            ProductExpiry.customer_id == customer_id,
-            ProductExpiry.collected_day >= since,
-        )
-
-        agrupado: dict[tuple[UUID, UUID], dict[str, list[tuple[date, Decimal]]]] = {}
-        for product_id, dia, vence_em, quantidade in (await session.execute(query)).all():
-            por_dia = agrupado.setdefault((customer_id, product_id), {})
-            por_dia.setdefault(dia.isoformat(), []).append((vence_em, quantidade))
-        return agrupado
 
     @staticmethod
     async def list_expiries_for_visits(

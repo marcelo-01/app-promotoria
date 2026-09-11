@@ -1,5 +1,5 @@
 <!--
-  A planilha de faturamento do ERP: o que ENTROU em cada cliente.
+  As planilhas do ERP: o que ENTROU em cada cliente.
 
   Esta é a metade da história que a contagem do promotor nunca viu. A diferença
   entre duas contagens é líquida — sem saber o que entrou, "o cliente vendeu 20"
@@ -13,22 +13,37 @@
   E o relatório trata o que não casou como TAREFA, não como erro: cada código
   desconhecido vem com quantas peças ficaram de fora, porque é esse número que
   diz se vale a pena cadastrar aquele item ou ignorá-lo.
+
+  São duas planilhas, e não duas telas: o fluxo é idêntico (anexar, conferir,
+  confirmar) e o relatório é o mesmo. Só muda o arquivo que o ERP gera e o que
+  cada um deixa de fora.
 -->
 <template>
   <q-page class="q-pa-md">
-    <div class="text-h6">Planilha de faturamento</div>
+    <div class="text-h6">Planilhas do ERP</div>
     <div class="text-caption text-grey-7 q-mb-md">
-      O que saiu para cada cliente. É por aqui que o sistema sabe o que entrou na
-      loja — sem isso, ele só consegue adivinhar pela variação do estoque.
+      O que saiu para cada cliente, vendido ou de brinde. É por aqui que o sistema
+      sabe o que entrou na loja — sem isso, ele só consegue adivinhar pela
+      variação do estoque.
     </div>
+
+    <q-btn-toggle
+      v-model="origem" no-caps unelevated spread
+      toggle-color="primary" color="white" text-color="grey-8"
+      class="seletor q-mb-md"
+      :options="ORIGENS"
+      :disable="lendo || gravando"
+      @update:model-value="limpar"
+    />
 
     <!-- ── Anexar ─────────────────────────────────────────────────────── -->
     <q-card flat bordered class="q-mb-md">
       <q-card-section class="row items-center q-col-gutter-md">
         <div class="col-12 col-md">
+          <div class="text-caption text-grey-7 q-mb-sm">{{ origemAtual.ajuda }}</div>
           <q-file
             v-model="arquivo" outlined dense clearable
-            accept=".xlsx,.xlsm" label="Planilha do ERP (.xlsx)"
+            accept=".xlsx,.xlsm" :label="`${origemAtual.label} (.xlsx)`"
             :disable="lendo || gravando"
             @update:model-value="aoAnexar"
           >
@@ -81,14 +96,22 @@
             </div>
           </div>
 
+          <q-banner v-if="descartePorPeso" dense class="bg-orange-1 rounded-borders q-mt-md">
+            <template #avatar><q-icon name="scale" color="orange-9" /></template>
+            <b>{{ descartePorPeso }} linha(s) não puderam ser contadas em peças.</b>
+            A planilha de brindes traz a quantidade na unidade de faturamento, e
+            nessas linhas ela é peso (queijo e manteiga a granel são vendidos por
+            quilo). Virar "32,75 peças" de um queijo de 4&nbsp;kg inflaria a
+            entrada em oito vezes, então elas ficam de fora. A correção é pedir a
+            coluna de peças também nesta exportação.
+          </q-banner>
+
           <div v-if="relato.first_day" class="text-caption text-grey-7 q-mt-md">
             Período da planilha: {{ formatDia(relato.first_day) }}
             <span v-if="relato.last_day !== relato.first_day">
               a {{ formatDia(relato.last_day) }}
             </span>
-            · devolução não entra: ela só é lançada no ERP quando a mercadoria
-            volta ao estoque, dias depois. Quem cobre a perda por validade é a
-            retirada que o promotor registra no aplicativo.
+            · {{ relato.ignored_cfop }} linha(s) ficaram de fora pelo CFOP.
           </div>
         </q-card-section>
 
@@ -101,6 +124,30 @@
             @click="importar"
           />
         </q-card-actions>
+      </q-card>
+
+      <!-- ── O que entrou, por motivo (só a planilha de brindes traz) ──── -->
+      <q-card v-if="relato.by_reason?.length" flat bordered class="q-mb-md">
+        <q-card-section class="q-pb-none">
+          <div class="text-subtitle2 text-weight-bold">Brindes por motivo</div>
+          <div class="text-caption text-grey-7">
+            O que passou pelo filtro de CFOP. Confira aqui se algum motivo entrou
+            (ou ficou de fora) indevidamente.
+          </div>
+        </q-card-section>
+        <q-list separator dense>
+          <q-item v-for="m in relato.by_reason" :key="m.code">
+            <q-item-section>
+              <q-item-label>{{ m.code }}</q-item-label>
+            </q-item-section>
+            <q-item-section side class="text-right">
+              <q-item-label class="text-weight-bold text-primary">
+                {{ formatQtd(m.quantity) }} pç
+              </q-item-label>
+              <q-item-label caption>{{ m.lines }} linha(s)</q-item-label>
+            </q-item-section>
+          </q-item>
+        </q-list>
       </q-card>
 
       <!-- ── O que ficou de fora ──────────────────────────────────────── -->
@@ -163,10 +210,32 @@ import { merchandisingApi } from '@/api/merchandising'
 
 const $q = useQuasar()
 
+const ORIGENS = [
+  {
+    value: 'venda',
+    label: 'Faturamento',
+    ajuda: 'A exportação de vendas por item. Entram as saídas de mercadoria; '
+      + 'devolução fica de fora — ela só é lançada no ERP quando a mercadoria '
+      + 'volta ao estoque, dias depois.',
+  },
+  {
+    value: 'brinde',
+    label: 'Brindes',
+    ajuda: 'A exportação de brindes. Entram só as remessas ao cliente (CFOP 5910 '
+      + 'e 6910); transferência entre filiais, retorno, consumo interno e baixa '
+      + 'por perda ficam de fora, porque não põem mercadoria em loja nenhuma.',
+  },
+]
+
+const origem = ref('venda')
 const arquivo = ref(null)
 const relato = ref(null)
 const lendo = ref(false)
 const gravando = ref(false)
+
+const origemAtual = computed(
+  () => ORIGENS.find((o) => o.value === origem.value) || ORIGENS[0]
+)
 
 const formatQtd = (v) =>
   Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
@@ -205,6 +274,11 @@ const numeros = computed(() => {
   ]
 })
 
+/** A planilha de brindes não traz contagem de peças — só quantidade na unidade
+ *  de faturamento, que mistura unidades e quilos. Linha fracionada é peso, e é
+ *  descartada em vez de virar peça inventada. */
+const descartePorPeso = computed(() => relato.value?.ignored_weight || 0)
+
 const pendencias = computed(() => [
   {
     titulo: 'Produtos sem cadastro',
@@ -240,7 +314,7 @@ async function conferir() {
   if (!arquivo.value) return
   lendo.value = true
   try {
-    relato.value = await merchandisingApi.previewInvoices(arquivo.value)
+    relato.value = await merchandisingApi.previewInvoices(arquivo.value, origem.value)
   } catch (error) {
     relato.value = null
     $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
@@ -252,7 +326,7 @@ async function conferir() {
 async function importar() {
   gravando.value = true
   try {
-    relato.value = await merchandisingApi.importInvoices(arquivo.value)
+    relato.value = await merchandisingApi.importInvoices(arquivo.value, origem.value)
     $q.notify({
       type: 'positive',
       message: `${relato.value.matched_lines} linha(s) importada(s).`,
@@ -267,6 +341,13 @@ async function importar() {
 </script>
 
 <style scoped>
+.seletor {
+  max-width: 26rem;
+  border: 1px solid rgba(0, 0, 0, 0.14);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
 .numero {
   font-size: 1.8rem;
   font-weight: 800;

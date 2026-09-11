@@ -89,12 +89,12 @@ export const merchandisingApi = {
    * Timeout largo: são milhares de linhas por arquivo, e o servidor ainda casa
    * cada uma com o cadastro antes de responder.
    */
-  async previewInvoices(file) {
-    return enviarPlanilha('/merchandising/invoices/preview', file)
+  async previewInvoices(file, kind = 'venda') {
+    return enviarPlanilha(`/merchandising/invoices/preview?kind=${kind}`, file)
   },
 
-  async importInvoices(file) {
-    return enviarPlanilha('/merchandising/invoices/import', file)
+  async importInvoices(file, kind = 'venda') {
+    return enviarPlanilha(`/merchandising/invoices/import?kind=${kind}`, file)
   },
 
 

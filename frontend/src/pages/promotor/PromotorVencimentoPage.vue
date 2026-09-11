@@ -74,9 +74,6 @@
             </div>
             <div class="text-caption saldo-detalhe">
               {{ formatQtd(produto.total) }} un contadas
-              <span v-if="produto.expiry_forecast">
-                · previsto {{ formatDia(produto.expiry_forecast) }}
-              </span>
             </div>
           </div>
           <div class="saldo-numero col-auto">
@@ -249,10 +246,22 @@ const podeEnviar = computed(
   () => produtos.value.length > 0 && produtos.value.every(fechado)
 )
 
+/**
+ * Por que este produto apareceu, em uma linha.
+ *
+ * É a conta do servidor dita em português. O promotor não precisa dela para
+ * digitar as datas — mas precisa dela para não achar que o aplicativo pediu por
+ * acaso, e para conseguir discordar quando o número estiver errado.
+ */
 function motivo(produto) {
-  return produto.expiry_reason === 'nao_escoa'
-    ? 'no ritmo de venda desta loja, não dá tempo de escoar antes de vencer'
-    : 'a data prevista está chegando'
+  if (produto.expiry_reason === 'parado') {
+    return 'não saiu nenhuma unidade desde a visita passada'
+  }
+  const dias = Number(produto.expiry_days_to_clear || 0)
+  const vida = Number(produto.expiry_shelf_life || 0)
+  if (!dias || !vida) return 'o estoque não escoa antes de vencer'
+  return `neste ritmo são ~${Math.round(dias)} dias para escoar, `
+    + `e o produto vive ${vida}`
 }
 
 // ── Edição ──────────────────────────────────────────────────────────────

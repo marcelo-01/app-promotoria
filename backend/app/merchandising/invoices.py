@@ -1,4 +1,9 @@
-"""A planilha de faturamento do ERP → as entradas de mercadoria em cada cliente.
+"""As planilhas do ERP → as entradas de mercadoria em cada cliente.
+
+São duas, com formatos diferentes: a de FATURAMENTO (o que foi vendido) e a de
+BRINDES (o que foi enviado sem cobrar). Na conta as duas se somam — mercadoria é
+mercadoria, chegou é chegou — mas os arquivos não se parecem, e por isso cada um
+tem o seu mapa de colunas aqui.
 
 Este módulo não fala com o banco: recebe o arquivo, devolve linhas e um relato
 do que não deu para aproveitar. Quem casa com o cadastro e grava é o serviço.
@@ -43,7 +48,7 @@ from typing import Optional
 # Cabeçalhos, como saem do ERP. A comparação é feita sem acento, sem espaço
 # sobrando e sem caixa — "DATA ENTREGA " veio com espaço no fim no primeiro
 # arquivo, e isso não pode quebrar a importação.
-COLUNAS = {
+COLUNAS_VENDA = {
     "company": "EMPRESA",
     "sale_number": "Nº VENDA",
     "invoice": "NOTA FISCAL",
@@ -57,12 +62,50 @@ COLUNAS = {
     "quantity": "N. PEÇAS",
 }
 
-# Só saída de mercadoria entra. CFOP de venda começa em 5 (dentro do estado) ou
-# 6 (fora). Entrada — devolução, retorno — começa em 1, 2 ou 3, e não é tratada
-# aqui: a devolução só é lançada no ERP dias depois, quando a mercadoria volta
-# fisicamente, e para esta conta isso chega tarde demais. Quem cobre a perda por
-# validade é a retirada que o promotor registra no aplicativo.
-CFOP_SAIDA = ("5", "6")
+# A planilha de brindes é outro relatório: menos colunas, nomes próprios, e uma
+# ausência que custa caro — não há contagem de PEÇAS, só a quantidade na unidade
+# de faturamento (ver `_pecas` abaixo).
+#
+# O cabeçalho vem com "COD PROUTO", sem o D, direto do ERP. A comparação ignora
+# pontuação e caixa, então "COD. PRODUTO" também casaria se um dia arrumarem —
+# mas o que está no arquivo hoje é o com o erro.
+COLUNAS_BRINDE = {
+    "sale_number": "Nº BRINDE",
+    "invoice": "NOTA FISCAL",
+    "issued_on": "DATA",
+    "cfop": "CFOP",
+    "customer_code": "CÓD",
+    "customer_name": "CLIENTE",
+    "customer_document": "CNPJ",
+    "product_code": "COD PROUTO",
+    "product_name": "ITEM",
+    "quantity": "QUANTIDADE",
+    "reason": "MOTIVO",
+}
+
+COLUNAS = {"venda": COLUNAS_VENDA, "brinde": COLUNAS_BRINDE}
+
+# ── O que entra de cada planilha ──────────────────────────────────────────
+#
+# FATURAMENTO: só saída de mercadoria. CFOP de venda começa em 5 (dentro do
+# estado) ou 6 (fora). Entrada — devolução, retorno — começa em 1, 2 ou 3, e não
+# é tratada aqui: a devolução só é lançada no ERP dias depois, quando a
+# mercadoria volta fisicamente, e para esta conta isso chega tarde demais. Quem
+# cobre a perda por validade é a retirada que o promotor registra no aplicativo.
+CFOP_VENDA = ("5", "6")
+
+# BRINDE: o relatório de brindes NÃO é só de brindes. Ele mistura, no mesmo
+# arquivo, remessa ao cliente com transferência entre filiais, retorno de
+# mercadoria, consumo interno e baixa por perda — e nenhuma dessas últimas põe
+# mercadoria no estoque de um cliente.
+#
+# O corte é pelo CFOP, e não pela coluna MOTIVO: 5910 e 6910 são exatamente
+# "remessa em bonificação, doação ou brinde", saída da empresa para o cliente.
+# MOTIVO é texto livre digitado por gente e muda de redação; CFOP é código
+# fiscal. No primeiro arquivo recebido os dois critérios selecionam o mesmo
+# conjunto — 368 linhas de 647 —, e o CFOP é o que continua valendo quando
+# alguém inventar um motivo novo.
+CFOP_BRINDE = ("5910", "6910")
 
 
 def _texto(valor) -> str:
@@ -126,6 +169,9 @@ class Row:
     product_code: str
     product_name: str
     quantity: float
+    # Só a planilha de brindes traz — é o que o administrador confere para saber
+    # se o filtro de CFOP pegou o que devia.
+    reason: str = ""
 
 
 @dataclass
@@ -134,8 +180,10 @@ class Parsed:
 
     rows: list[Row] = field(default_factory=list)
     total: int = 0                       # linhas de dados lidas
-    ignored_cfop: int = 0                # devolução e outras entradas
+    ignored_cfop: int = 0                # o que não é remessa ao cliente
     ignored_incomplete: int = 0          # sem data, sem quantidade, sem chave
+    # Linhas em que a quantidade não é contagem de peças (ver `_pecas`)
+    ignored_weight: int = 0
     missing_columns: list[str] = field(default_factory=list)
 
     @property
@@ -147,8 +195,38 @@ class Parsed:
         return max((r.issued_on for r in self.rows), default=None)
 
 
-def parse(content: bytes) -> Parsed:
-    """Arquivo .xlsx → linhas de venda aproveitáveis.
+def _pecas(valor, kind: str) -> Optional[float]:
+    """Quantidade da linha, em PEÇAS — ou `None` quando não dá para saber.
+
+    Na planilha de faturamento existe a coluna `N. PEÇAS`, e o número já vem
+    certo. Na de brindes não existe: há só `QUANTIDADE`, na unidade de
+    faturamento, que mistura unidades e QUILOS (queijo e manteiga a granel são
+    vendidos por peso) sem nenhuma coluna dizendo qual é qual.
+
+    O que se pode afirmar com segurança é isto: **contagem de peças é inteira.**
+    Uma linha de brinde com 1,55 ou 32,75 é peso, e transformá-la em "32,75
+    peças" de um queijo de 4 kg inflaria a entrada em oito vezes — estragando a
+    venda calculada daquele produto naquele cliente.
+
+    Então fracionário é descartado e contado à parte, para o administrador saber
+    o tamanho do buraco. Descartar subestima a entrada, o que subestima a venda,
+    o que provoca aviso A MAIS — o lado seguro do erro.
+
+    A correção de verdade é pedir `N. PEÇAS` também na exportação de brindes.
+    """
+    numero = _numero(valor)
+    if numero is None:
+        return None
+    if kind == "brinde" and abs(numero - round(numero)) > 1e-6:
+        return None
+    return numero
+
+
+def parse(content: bytes, kind: str = "venda") -> Parsed:
+    """Arquivo .xlsx → linhas de entrada de mercadoria aproveitáveis.
+
+    `kind` escolhe o mapa de colunas e o filtro de CFOP: `'venda'` para a
+    planilha de faturamento, `'brinde'` para a de brindes.
 
     Lê a primeira aba. Cabeçalho que não for encontrado é reportado em
     `missing_columns` em vez de estourar: uma exportação com uma coluna a menos
@@ -156,6 +234,7 @@ def parse(content: bytes) -> Parsed:
     """
     import openpyxl
 
+    colunas = COLUNAS[kind]
     wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
     ws = wb[wb.sheetnames[0]]
     linhas = ws.iter_rows(values_only=True)
@@ -163,11 +242,11 @@ def parse(content: bytes) -> Parsed:
     try:
         cabecalho = next(linhas)
     except StopIteration:
-        return Parsed(missing_columns=sorted(COLUNAS.values()))
+        return Parsed(missing_columns=sorted(colunas.values()))
 
     posicao = {_chave(nome): i for i, nome in enumerate(cabecalho)}
     indices, faltando = {}, []
-    for campo, titulo in COLUNAS.items():
+    for campo, titulo in colunas.items():
         i = posicao.get(_chave(titulo))
         if i is None:
             faltando.append(titulo)
@@ -179,22 +258,30 @@ def parse(content: bytes) -> Parsed:
 
     saida = Parsed()
     for linha in linhas:
-        pega = lambda campo: linha[indices[campo]]  # noqa: E731
+        pega = lambda campo: linha[indices[campo]] if campo in indices else None  # noqa: E731
         if not any(v is not None for v in linha):
             continue
         saida.total += 1
 
         cfop = _texto(pega("cfop"))
-        if not cfop.startswith(CFOP_SAIDA):
+        aceita = cfop in CFOP_BRINDE if kind == "brinde" else cfop.startswith(CFOP_VENDA)
+        if not aceita:
             saida.ignored_cfop += 1
             continue
 
         emitida = _data(pega("issued_on"))
-        quantidade = _numero(pega("quantity"))
         venda = _texto(pega("sale_number"))
         item = _texto(pega("product_code"))
+        if not emitida or not venda or not item:
+            saida.ignored_incomplete += 1
+            continue
 
-        if not emitida or not quantidade or quantidade <= 0 or not venda or not item:
+        quantidade = _pecas(pega("quantity"), kind)
+        if quantidade is None:
+            # Peso disfarçado de quantidade: não vira peça, e não se chuta.
+            saida.ignored_weight += 1
+            continue
+        if quantidade <= 0:
             saida.ignored_incomplete += 1
             continue
 
@@ -211,6 +298,7 @@ def parse(content: bytes) -> Parsed:
                 product_code=item,
                 product_name=_texto(pega("product_name")),
                 quantity=quantidade,
+                reason=_texto(pega("reason")),
             )
         )
 

@@ -6,6 +6,7 @@ from app.infrastructure.persistence.models.product import Product  # noqa: F401
 from app.infrastructure.persistence.models.promoter_customer import PromoterCustomer  # noqa: F401
 from app.infrastructure.persistence.models.customer_product import CustomerProduct  # noqa: F401
 from app.infrastructure.persistence.models.delivery import (  # noqa: F401
+    DeliveryKind,
     ProductDelivery,
     ProductRemoval,
 )

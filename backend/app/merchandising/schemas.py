@@ -41,16 +41,22 @@ class CountProductResponse(BaseModel):
     units: Optional[Decimal] = None
 
     # ── Vencimento ────────────────────────────────────────────────────────
-    # O servidor decide QUEM precisa de coleta (é ele que tem o histórico); o
-    # aparelho decide QUANDO barrar, com o total que acabou de ser contado. A
-    # conta não pode depender de rede: o promotor fecha a contagem sem sinal.
+    # O servidor decide QUEM precisa de coleta (é ele que tem o histórico e as
+    # planilhas); o aparelho decide QUANDO barrar, com o total que acabou de ser
+    # contado. A conta não pode depender de rede: o promotor fecha a contagem sem
+    # sinal.
     collect_expiry: bool = False
-    # O que o razão de lotes acha que vence primeiro, e quando. Vai para a tela
-    # como referência — o promotor confere contra a embalagem.
-    expiry_forecast: Optional[date] = None
-    expiry_quantity: Optional[Decimal] = None
-    # 'vence' (a data está chegando) ou 'nao_escoa' (não dá tempo de vender)
+    # 'nao_escoa' (no ritmo do ciclo, o estoque não sai antes de vencer) ou
+    # 'parado' (não vendeu nada no ciclo — estoque parado não sai sozinho)
     expiry_reason: Optional[str] = None
+
+    # A conta aberta, para a tela poder EXPLICAR por que este produto apareceu.
+    # Nulo em `days_to_clear` quer dizer "não escoa nunca", que é diferente de
+    # zero e não pode virar zero na serialização.
+    expiry_days_to_clear: Optional[Decimal] = None
+    expiry_shelf_life: Optional[int] = None
+    expiry_cycle_days: Optional[int] = None
+    expiry_sold: Optional[Decimal] = None
 
     model_config = {"from_attributes": True}
 
@@ -99,14 +105,22 @@ class InvoiceImportResponse(BaseModel):
     # nada mais vem: não dá para relatar sobre um arquivo que não foi entendido.
     missing_columns: List[str] = []
 
+    # 'venda' (faturamento) ou 'brinde'
+    kind: str = "venda"
+
     total_lines: int = 0
-    # Linhas de saída de mercadoria, já limpas
+    # Linhas de entrada de mercadoria em cliente, já limpas
     usable_lines: int = 0
-    # Devolução e outras entradas (CFOP que não começa em 5 ou 6). Ficam de fora
-    # de propósito: a devolução só é lançada no ERP quando a mercadoria volta ao
-    # estoque, dias depois, e para esta conta isso chega tarde demais.
+    # O que o CFOP deixou de fora. No faturamento, devolução e outras entradas —
+    # a devolução só é lançada no ERP quando a mercadoria volta ao estoque, dias
+    # depois, e para esta conta chega tarde demais. No brinde, tudo que não é
+    # remessa ao cliente: transferência entre filiais, retorno, consumo interno,
+    # baixa por perda.
     ignored_cfop: int = 0
     ignored_incomplete: int = 0
+    # Linhas cuja quantidade é PESO, não contagem de peças (só na de brindes,
+    # que não traz coluna de peças). Descartadas em vez de chutadas.
+    ignored_weight: int = 0
 
     first_day: Optional[date] = None
     last_day: Optional[date] = None
@@ -119,6 +133,9 @@ class InvoiceImportResponse(BaseModel):
 
     unknown_customers: List[UnknownKeyResponse] = []
     unknown_products: List[UnknownKeyResponse] = []
+    # A quebra por motivo do que ENTROU (só na planilha de brindes). É por aqui
+    # que se confere se o filtro de CFOP pegou o que devia.
+    by_reason: List[UnknownKeyResponse] = []
 
 
 # ─── Vencido retirado da loja ─────────────────────────────────────────────────

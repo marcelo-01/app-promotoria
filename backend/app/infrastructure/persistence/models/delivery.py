@@ -1,3 +1,4 @@
+import enum
 from uuid import uuid4
 
 from sqlalchemy import Column, Date, ForeignKey, Index, Numeric, String, UniqueConstraint
@@ -6,8 +7,21 @@ from sqlalchemy import Uuid as UUID
 from app.infrastructure.persistence.base import DeclarativeBase, TimestampMixin
 
 
+class DeliveryKind(str, enum.Enum):
+    """De qual planilha a entrada veio.
+
+    As duas entram na conta somadas — mercadoria é mercadoria, chegou é chegou —
+    mas ficam separadas porque saem de relatórios diferentes do ERP, com chaves e
+    colunas diferentes, e porque o administrador precisa enxergar o brinde à
+    parte quando a conta não fecha.
+    """
+
+    VENDA = "venda"
+    BRINDE = "brinde"
+
+
 class ProductDelivery(DeclarativeBase, TimestampMixin):
-    """O que a empresa faturou para um cliente — uma linha por item de venda.
+    """O que a empresa mandou para um cliente — uma linha por item.
 
     Vem da planilha de faturamento do ERP, anexada pelo administrador. É a
     metade da história que a contagem do promotor nunca conseguiu ver: a
@@ -30,6 +44,11 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=False)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
 
+    # 'venda' (planilha de faturamento) ou 'brinde' (planilha de brindes).
+    # String e não Enum nativo, pelo mesmo motivo de `stock_visits.status`: evita
+    # ALTER TYPE no dia em que aparecer uma terceira origem.
+    kind = Column(String(10), nullable=False, default=DeliveryKind.VENDA.value)
+
     issued_on = Column(Date, nullable=False)
 
     # N. PEÇAS da planilha, e não QUANTIDADE: a coluna de quantidade mistura
@@ -42,6 +61,9 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
     # foi faturada vem sem número de nota, e essas linhas entrariam duplicadas
     # no upload do dia seguinte. A empresa entra junto porque são duas (matriz e
     # filial) e nada garante que a numeração siga compartilhada para sempre.
+    #
+    # No brinde a planilha não traz empresa; entra '—' e a chave se apoia no
+    # número do brinde, que é único no relatório inteiro.
     company = Column(String(120), nullable=False)
     sale_number = Column(String(40), nullable=False)
 
@@ -49,8 +71,10 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
     cfop = Column(String(10), nullable=True)
 
     __table_args__ = (
+        # `kind` entra na chave porque as duas planilhas numeram por conta
+        # própria: nada impede que um nº de brinde coincida com um nº de venda.
         UniqueConstraint(
-            "tenant_id", "company", "sale_number", "product_id",
+            "tenant_id", "kind", "company", "sale_number", "product_id",
             name="uq_product_deliveries_venda",
         ),
         Index("idx_product_deliveries_lookup", "tenant_id", "customer_id", "product_id"),

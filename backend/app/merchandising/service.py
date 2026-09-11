@@ -10,7 +10,9 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.service import CustomersService
-from app.infrastructure.persistence.models.delivery import ProductDelivery, ProductRemoval
+from app.infrastructure.persistence.models.delivery import (
+    DeliveryKind, ProductDelivery, ProductRemoval,
+)
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
@@ -28,10 +30,10 @@ from app.merchandising.schemas import (
     StockVisitResponse, StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
 )
 
-# Quanto passado o razão de lotes enxerga ao decidir a coleta de vencimento.
-# Precisa cobrir com folga a vida de um perecível no cliente: com menos, o lote
-# que chegou há três meses some da história e o produto parece novo.
-EXPIRY_WINDOW_DAYS = 180
+# Quanto passado a série precisa cobrir para que as duas últimas contagens
+# completas apareçam. A conta usa só o último ciclo, mas um cliente que ficou um
+# mês sem visita ainda tem de ter as duas pontas dentro da janela.
+EXPIRY_WINDOW_DAYS = 120
 
 
 def _is_admin(user: User) -> bool:
@@ -141,12 +143,18 @@ class MerchandisingService:
                     last_units=last.get(p.id, vazio)[1],
                     last_quantity=last.get(p.id, vazio)[2],
                     collect_expiry=p.id in avisos,
-                    expiry_forecast=avisos[p.id].expires_on if p.id in avisos else None,
-                    expiry_quantity=(
-                        Decimal(str(round(avisos[p.id].quantity, 3)))
+                    expiry_reason=avisos[p.id].reason if p.id in avisos else None,
+                    expiry_days_to_clear=(
+                        Decimal(str(round(avisos[p.id].days_to_clear, 1)))
+                        if p.id in avisos and avisos[p.id].days_to_clear is not None
+                        else None
+                    ),
+                    expiry_shelf_life=avisos[p.id].shelf_life if p.id in avisos else None,
+                    expiry_cycle_days=avisos[p.id].cycle_days if p.id in avisos else None,
+                    expiry_sold=(
+                        Decimal(str(round(avisos[p.id].sold, 3)))
                         if p.id in avisos else None
                     ),
-                    expiry_reason=avisos[p.id].reason if p.id in avisos else None,
                 )
                 for p, position in products
             ],
@@ -161,52 +169,52 @@ class MerchandisingService:
         Roda no SERVIDOR, ao abrir a folha — que é o único momento em que o
         promotor está garantidamente com sinal (a tela de contagem já não abre
         sem ele). O aparelho recebe a resposta pronta e, na hora de fechar a
-        contagem, só precisa comparar com o que acabou de contar: nada de rede
-        no meio do bloqueio.
+        contagem, só precisa comparar com o que acabou de contar: nada de rede no
+        meio do bloqueio.
 
-        Um produto entrar aqui não significa coletar. Significa que HÁ mercadoria
-        velha nesta loja — se a contagem de hoje der zero neste produto, ela foi
-        embora e não há data nenhuma para ler.
+        Um produto entrar aqui não significa coletar. Significa que o estoque
+        DAQUELE produto naquela loja não escoa a tempo — se a contagem de hoje
+        der zero nele, não há mercadoria nem data para ler.
         """
-        chegada = {
+        vidas = {
             p.id: p.arrival_shelf_life_days
             for p in products
             if p.arrival_shelf_life_days
         }
-        # Sem nenhum produto com validade de chegada cadastrada não há o que
+        # Sem nenhum produto com validade na chegada cadastrada não há o que
         # calcular — e nem por que ir ao banco buscar a história inteira.
-        if not chegada:
+        if not vidas:
             return {}
 
-        series, _, hoje = await MerchandisingService._stock_series(
+        series, _, _ = await MerchandisingService._stock_series(
             session, tenant_id, EXPIRY_WINDOW_DAYS, customer_id
         )
-        desde = date.fromisoformat(hoje) - timedelta(days=EXPIRY_WINDOW_DAYS)
 
-        coletadas = await Repo.list_expiries_for_customer(
-            session, tenant_id, customer_id, desde
+        # O ciclo é o mesmo para todos os produtos do cliente: ele nasce dos dias
+        # em que as DUAS contagens chegaram, e isso é propriedade da visita, não
+        # do produto. Basta achar a primeira série que tenha um.
+        janela = next(
+            (b for b in (expiry.cycle_bounds(serie) for serie in series) if b), None
         )
-        # As notas emitidas para este cliente (planilha do administrador) e o
-        # vencido que o promotor retirou. Sem nenhuma das duas, o razão de lotes
-        # cai sozinho no comportamento de antes — não há ramo especial aqui.
-        entradas = await Repo.list_deliveries_for_customer(
-            session, tenant_id, customer_id, desde
+        if not janela:
+            return {}
+
+        anterior, atual = janela
+        faturado = await Repo.sum_deliveries_in_cycle(
+            session, tenant_id, customer_id, anterior, atual, DeliveryKind.VENDA.value
         )
-        retiradas = await Repo.list_removals_for_customer(
-            session, tenant_id, customer_id, desde
+        brindes = await Repo.sum_deliveries_in_cycle(
+            session, tenant_id, customer_id, anterior, atual, DeliveryKind.BRINDE.value
+        )
+        retirados = await Repo.sum_removals_in_cycle(
+            session, tenant_id, customer_id, anterior, atual
         )
 
+        porta = lambda mapa: {  # noqa: E731
+            (customer_id, product_id): total for product_id, total in mapa.items()
+        }
         avisos = expiry.forecasts(
-            series, chegada, date.fromisoformat(hoje),
-            {
-                chave: {
-                    dia: [(quando, float(quanto)) for quando, quanto in linhas]
-                    for dia, linhas in por_dia.items()
-                }
-                for chave, por_dia in coletadas.items()
-            },
-            entradas,
-            retiradas,
+            series, vidas, porta(faturado), porta(brindes), porta(retirados)
         )
         return {
             product_id: veredito
@@ -218,9 +226,10 @@ class MerchandisingService:
 
     @staticmethod
     async def import_invoices(
-        session: AsyncSession, tenant_id: UUID, content: bytes, save: bool
+        session: AsyncSession, tenant_id: UUID, content: bytes, save: bool,
+        kind: str = DeliveryKind.VENDA.value,
     ) -> InvoiceImportResponse:
-        """Lê a planilha do ERP e grava as entradas de mercadoria.
+        """Lê uma das planilhas do ERP e grava as entradas de mercadoria.
 
         `save=False` é a prévia: lê, casa com o cadastro e relata, sem tocar no
         banco. É o modo em que a tela abre — anexar um arquivo errado não pode
@@ -233,9 +242,11 @@ class MerchandisingService:
         anexa de novo — a importação é idempotente pela chave da venda, então
         reanexar o mesmo arquivo não duplica o que já entrou.
         """
-        lido = invoices.parse(content)
+        lido = invoices.parse(content, kind)
         if lido.missing_columns:
-            return InvoiceImportResponse(missing_columns=lido.missing_columns)
+            return InvoiceImportResponse(
+                kind=kind, missing_columns=lido.missing_columns
+            )
 
         produtos = await Repo.products_by_sku(session, tenant_id)
         clientes = await Repo.customers_by_document(session, tenant_id)
@@ -244,6 +255,8 @@ class MerchandisingService:
         # código → (nome, linhas, quantidade) do que ficou de fora
         sem_produto: dict[str, list] = {}
         sem_cliente: dict[str, list] = {}
+        # motivo → o mesmo, do que ENTROU (a planilha de brindes traz motivo)
+        motivos: dict[str, list] = {}
 
         for linha in lido.rows:
             product_id = produtos.get(linha.product_code)
@@ -265,10 +278,16 @@ class MerchandisingService:
             if product_id is None or customer_id is None:
                 continue
 
+            if linha.reason:
+                conta = motivos.setdefault(linha.reason, [linha.reason, 0, 0.0, None])
+                conta[1] += 1
+                conta[2] += linha.quantity
+
             entradas.append(
                 ProductDelivery(
                     id=uuid4(),
                     tenant_id=tenant_id,
+                    kind=kind,
                     customer_id=customer_id,
                     product_id=product_id,
                     issued_on=linha.issued_on,
@@ -295,10 +314,12 @@ class MerchandisingService:
         )
 
         return InvoiceImportResponse(
+            kind=kind,
             total_lines=lido.total,
             usable_lines=len(lido.rows),
             ignored_cfop=lido.ignored_cfop,
             ignored_incomplete=lido.ignored_incomplete,
+            ignored_weight=lido.ignored_weight,
             first_day=lido.first_day,
             last_day=lido.last_day,
             matched_lines=len(entradas),
@@ -306,6 +327,7 @@ class MerchandisingService:
             saved=save,
             unknown_customers=desconhecidos(sem_cliente),
             unknown_products=desconhecidos(sem_produto),
+            by_reason=desconhecidos(motivos),
         )
 
     # ── Vencido retirado da loja ──────────────────────────────────────────

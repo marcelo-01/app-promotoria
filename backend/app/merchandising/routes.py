@@ -8,6 +8,7 @@ from fastapi import (
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import require_roles
+from app.infrastructure.persistence.models.delivery import DeliveryKind
 from app.infrastructure.persistence.models.stock_visit import VisitType
 from app.infrastructure.persistence.session import get_db_session
 from app.merchandising import excel
@@ -351,6 +352,7 @@ async def list_removals(
 @router.post("/invoices/preview", response_model=InvoiceImportResponse)
 async def preview_invoices(
     file: UploadFile = File(...),
+    kind: str = Query(default="venda", description="venda (faturamento) ou brinde"),
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
@@ -360,24 +362,37 @@ async def preview_invoices(
     de fora, para o administrador conferir antes de confirmar.
     """
     return await MerchandisingService.import_invoices(
-        session, context["tenant_id"], await _ler_planilha(file), save=False
+        session, context["tenant_id"], await _ler_planilha(file),
+        save=False, kind=_validate_kind(kind),
     )
 
 
 @router.post("/invoices/import", response_model=InvoiceImportResponse)
 async def import_invoices(
     file: UploadFile = File(...),
+    kind: str = Query(default="venda", description="venda (faturamento) ou brinde"),
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
     """Grava as entradas de mercadoria da planilha.
 
-    Idempotente pela chave (empresa, nº venda, item): anexar o mesmo arquivo de
-    novo não duplica, e uma linha corrigida no ERP sobrescreve a anterior.
+    Idempotente pela chave (origem, empresa, nº do documento, item): anexar o
+    mesmo arquivo de novo não duplica, e uma linha corrigida no ERP sobrescreve
+    a anterior.
     """
     return await MerchandisingService.import_invoices(
-        session, context["tenant_id"], await _ler_planilha(file), save=True
+        session, context["tenant_id"], await _ler_planilha(file),
+        save=True, kind=_validate_kind(kind),
     )
+
+
+def _validate_kind(value: str) -> str:
+    try:
+        return DeliveryKind(value).value
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="Planilha inválida. Use venda ou brinde."
+        )
 
 
 async def _ler_planilha(file: UploadFile) -> bytes:

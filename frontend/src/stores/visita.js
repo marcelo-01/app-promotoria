@@ -243,8 +243,13 @@ export const useVisitaStore = defineStore('visita', () => {
         image_url: product.image_url || null,
         package_size: Number(product.package_size) || 1,
         total: total[product.id],
-        expiry_forecast: product.expiry_forecast || null,
+        // A conta aberta, para a tela de vencimento poder explicar por que este
+        // produto apareceu — sem precisar de rede para perguntar de novo.
         expiry_reason: product.expiry_reason || null,
+        expiry_days_to_clear: product.expiry_days_to_clear ?? null,
+        expiry_shelf_life: product.expiry_shelf_life ?? null,
+        expiry_cycle_days: product.expiry_cycle_days ?? null,
+        expiry_sold: product.expiry_sold ?? null,
       }))
   }
 
