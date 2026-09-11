@@ -10,19 +10,26 @@ from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.service import CustomersService
+from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
-from app.merchandising import consolidation, evolution
+from app.merchandising import consolidation, evolution, expiry
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     CountProductResponse, CountSheetResponse, MovedProductResponse,
-    PromoterCustomerResponse, ShelfGapResponse, StalledProductResponse,
+    ProductExpiryInput, ProductExpiryResponse, PromoterCustomerResponse,
+    ShelfGapResponse, StalledProductResponse,
     StockCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockPointResponse, StockVisitCreate, StockVisitItemInput, StockVisitItemResponse,
     StockVisitResponse, StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
 )
+
+# Quanto passado o razão de lotes enxerga ao decidir a coleta de vencimento.
+# Precisa cobrir com folga a vida de um perecível no cliente: com menos, o lote
+# que chegou há três meses some da história e o produto parece novo.
+EXPIRY_WINDOW_DAYS = 180
 
 
 def _is_admin(user: User) -> bool:
@@ -112,6 +119,10 @@ class MerchandisingService:
             # Sem mix cadastrado: cai no catálogo completo
             products = [(p, 0) for p in await Repo.list_all_products(session, tenant_id)]
 
+        avisos = await MerchandisingService._expiry_forecasts(
+            session, tenant_id, customer_id, [p for p, _ in products]
+        )
+
         vazio = (None, None, None)
         return CountSheetResponse(
             customer_id=customer.id,
@@ -127,10 +138,67 @@ class MerchandisingService:
                     last_boxes=last.get(p.id, vazio)[0],
                     last_units=last.get(p.id, vazio)[1],
                     last_quantity=last.get(p.id, vazio)[2],
+                    collect_expiry=p.id in avisos,
+                    expiry_forecast=avisos[p.id].expires_on if p.id in avisos else None,
+                    expiry_quantity=(
+                        Decimal(str(round(avisos[p.id].quantity, 3)))
+                        if p.id in avisos else None
+                    ),
+                    expiry_reason=avisos[p.id].reason if p.id in avisos else None,
                 )
                 for p, position in products
             ],
         )
+
+    @staticmethod
+    async def _expiry_forecasts(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, products: list,
+    ) -> dict[UUID, expiry.Forecast]:
+        """Quais produtos deste cliente pedem coleta de vencimento hoje.
+
+        Roda no SERVIDOR, ao abrir a folha — que é o único momento em que o
+        promotor está garantidamente com sinal (a tela de contagem já não abre
+        sem ele). O aparelho recebe a resposta pronta e, na hora de fechar a
+        contagem, só precisa comparar com o que acabou de contar: nada de rede
+        no meio do bloqueio.
+
+        Um produto entrar aqui não significa coletar. Significa que HÁ mercadoria
+        velha nesta loja — se a contagem de hoje der zero neste produto, ela foi
+        embora e não há data nenhuma para ler.
+        """
+        chegada = {
+            p.id: p.arrival_shelf_life_days
+            for p in products
+            if p.arrival_shelf_life_days
+        }
+        # Sem nenhum produto com validade de chegada cadastrada não há o que
+        # calcular — e nem por que ir ao banco buscar a história inteira.
+        if not chegada:
+            return {}
+
+        series, _, hoje = await MerchandisingService._stock_series(
+            session, tenant_id, EXPIRY_WINDOW_DAYS, customer_id
+        )
+        coletadas = await Repo.list_expiries_for_customer(
+            session, tenant_id, customer_id,
+            date.fromisoformat(hoje) - timedelta(days=EXPIRY_WINDOW_DAYS),
+        )
+
+        avisos = expiry.forecasts(
+            series, chegada, date.fromisoformat(hoje),
+            {
+                chave: {
+                    dia: [(quando, float(quanto)) for quando, quanto in linhas]
+                    for dia, linhas in por_dia.items()
+                }
+                for chave, por_dia in coletadas.items()
+            },
+        )
+        return {
+            product_id: veredito
+            for (_, product_id), veredito in avisos.items()
+            if veredito.alert
+        }
 
     @staticmethod
     async def visit_sheet(
@@ -239,6 +307,16 @@ class MerchandisingService:
             ),
         )
 
+        # As datas coletadas NÃO são apagadas pelo "não tem produtos aqui": elas
+        # descrevem o par (gôndola + estoque), e o lado vazio é justamente o que
+        # joga todo o estoque para o outro lado.
+        await Repo.replace_expiries(
+            session, visit.id,
+            await MerchandisingService._build_expiries(
+                session, tenant_id, visit, payload.expiries
+            ),
+        )
+
         return await MerchandisingService.get_visit(session, tenant_id, visit.id)
 
     @staticmethod
@@ -302,6 +380,48 @@ class MerchandisingService:
         ]
 
     @staticmethod
+    async def _build_expiries(
+        session: AsyncSession, tenant_id: UUID, visit: StockVisit,
+        inputs: list[ProductExpiryInput],
+    ) -> list[ProductExpiry]:
+        """As datas digitadas pelo promotor → linhas da coleta.
+
+        Mesma conversão da contagem (caixas viram unidades pelo `package_size` de
+        hoje), pelo mesmo motivo: é na unidade convertida que a soma das datas
+        fecha com o total contado.
+
+        `collected_day` é o dia LOCAL da visita, e não o instante UTC: é por ele
+        que a coleta se encaixa no meio da história do produto, no mesmo dia em
+        que o par se formou.
+        """
+        if not inputs:
+            return []
+
+        sizes = await Repo.package_sizes(
+            session, tenant_id, [linha.product_id for linha in inputs]
+        )
+        dia = consolidation.local_day(visit.visited_at or visit.submitted_at)
+
+        return [
+            ProductExpiry(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                customer_id=visit.customer_id,
+                product_id=linha.product_id,
+                promoter_id=visit.promoter_id,
+                visit_id=visit.id,
+                collected_day=date.fromisoformat(dia),
+                expires_at=linha.expires_at,
+                boxes=linha.boxes,
+                units=linha.units,
+                quantity=(
+                    linha.boxes * sizes.get(linha.product_id, Decimal(1)) + linha.units
+                ),
+            )
+            for linha in inputs
+        ]
+
+    @staticmethod
     async def submit_visit(
         session: AsyncSession, tenant_id: UUID, user: User, visit_id: UUID
     ) -> StockVisitResponse:
@@ -340,6 +460,18 @@ class MerchandisingService:
             for item, product in item_rows
         ]
 
+        coletadas = (await Repo.list_expiries_for_visits(session, [visit.id])).get(
+            visit.id, []
+        )
+        expiries = [
+            ProductExpiryResponse(
+                id=linha.id, product_id=linha.product_id, product_name=nome,
+                expires_at=linha.expires_at, boxes=linha.boxes,
+                units=linha.units, quantity=linha.quantity,
+            )
+            for linha, nome in coletadas
+        ]
+
         par = await MerchandisingService._pair_of(session, tenant_id, visit)
 
         return StockVisitResponse(
@@ -352,7 +484,7 @@ class MerchandisingService:
             visited_at=visit.visited_at,
             submitted_at=visit.submitted_at, exported_at=visit.exported_at,
             notes=visit.notes, client_uuid=visit.client_uuid,
-            items=items, items_count=len(items),
+            items=items, items_count=len(items), expiries=expiries,
             created_at=visit.created_at, updated_at=visit.updated_at,
         )
 

@@ -31,6 +31,17 @@ class Product(DeclarativeBase, TimestampMixin):
     is_perishable = Column(Boolean, default=True, nullable=False)
     shelf_life_days = Column(Integer, nullable=True)
 
+    # Com quantos dias para vencer a mercadoria COSTUMA CHEGAR ao cliente. Não é
+    # derivado de `shelf_life_days`: entre a fabricação e a prateleira do cliente
+    # há um caminho que ninguém mede aqui, e este número é o que o comercial
+    # observa na prática ("chega com uns 40 dias").
+    #
+    # É por ele, e não pela validade total, que se estima quando vence o que está
+    # na loja: vencimento = dia em que o lote apareceu + estes dias. Produto sem
+    # ele nunca entra na coleta de vencimento — que é o que permite ligar a
+    # função produto a produto, conforme o cadastro for sendo preenchido.
+    arrival_shelf_life_days = Column(Integer, nullable=True)
+
     image_url = Column(String(512), nullable=True)
 
     # DIVERGÊNCIA DELIBERADA: o ERP não tem esta coluna (ver seção 22 do plano).

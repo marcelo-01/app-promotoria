@@ -23,6 +23,15 @@ export const promotorRoutes = [
         props: true,
       },
       {
+        // A coleta que segura a contagem. Sem `visitType` na URL: a pendência é
+        // do CLIENTE (o total é do par gôndola + estoque), e qual dos dois lados
+        // está retido fica guardado no aparelho.
+        path: 'clientes/:customerId/vencimento',
+        name: 'PromotorVencimento',
+        component: () => import('@/pages/promotor/PromotorVencimentoPage.vue'),
+        props: true,
+      },
+      {
         path: 'envios',
         name: 'PromotorEnvios',
         component: () => import('@/pages/promotor/PromotorEnviosPage.vue'),

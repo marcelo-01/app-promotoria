@@ -98,10 +98,17 @@ const dialogSenha = ref(false)
 
 const canGoBack = computed(() => route.name !== 'PromotorClientes')
 const corrigindo = computed(() => route.name === 'PromotorEdicao')
-// Corrigir usa a mesma tela cheia da contagem, com a mesma barra no rodapé
-const contando = computed(() => corrigindo.value || route.name === 'PromotorContagem')
+const coletandoVencimento = computed(() => route.name === 'PromotorVencimento')
+// Corrigir e coletar vencimento usam a mesma tela cheia da contagem, com a mesma
+// barra no rodapé — e por isso também escondem as abas.
+const contando = computed(
+  () => corrigindo.value || coletandoVencimento.value || route.name === 'PromotorContagem'
+)
 
 const title = computed(() => {
+  if (coletandoVencimento.value) {
+    return route.query.c ? `Vencimento · ${route.query.c}` : 'Vencimento'
+  }
   if (corrigindo.value) {
     return route.query.c ? `Corrigir · ${route.query.c}` : 'Corrigir envio'
   }

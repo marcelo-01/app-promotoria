@@ -199,6 +199,17 @@
             <template #append><span class="text-caption text-grey-7">dias</span></template>
           </q-input>
 
+          <q-input
+            v-model="produtoForm.arrival_shelf_life_days" outlined dense clearable
+            type="number" min="1" step="1" label="Validade na chegada"
+            hint="Com quantos dias PARA VENCER a mercadoria costuma chegar ao cliente.
+                  É o que faz o app pedir a coleta de vencimento na hora certa —
+                  em branco, este produto nunca entra na coleta."
+          >
+            <template #prepend><q-icon name="local_shipping" /></template>
+            <template #append><span class="text-caption text-grey-7">dias</span></template>
+          </q-input>
+
           <div class="row items-center q-col-gutter-md">
             <div class="col-auto">
               <q-avatar rounded size="96px" color="grey-3">
@@ -356,7 +367,8 @@ const carregandoProdutos = ref(false)
 const dialogProduto = ref(false)
 
 const produtoForm = reactive({
-  id: null, name: '', package_size: 1, shelf_life_days: null, image_url: null,
+  id: null, name: '', package_size: 1, shelf_life_days: null,
+  arrival_shelf_life_days: null, image_url: null,
 })
 const fotoArquivo = ref(null)
 const fotoPreview = ref(null)
@@ -370,6 +382,8 @@ const colunasProduto = [
     sortable: true, format: (v) => formatQtd(v) },
   { name: 'shelf_life_days', label: 'Validade', field: 'shelf_life_days', align: 'right',
     sortable: true, format: (v) => (v == null ? '—' : `${v} dias`) },
+  { name: 'arrival_shelf_life_days', label: 'Na chegada', field: 'arrival_shelf_life_days',
+    align: 'right', sortable: true, format: (v) => (v == null ? '—' : `${v} dias`) },
   { name: 'is_active', label: 'Situação', field: 'is_active', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
@@ -397,6 +411,7 @@ function abrirProduto(row) {
     name: row?.name || '',
     package_size: Number(row?.package_size) || 1,
     shelf_life_days: row?.shelf_life_days ?? null,
+    arrival_shelf_life_days: row?.arrival_shelf_life_days ?? null,
     image_url: row?.image_url || null,
   })
   fotoArquivo.value = null
@@ -441,14 +456,36 @@ async function salvarProduto() {
     })
     return
   }
-  // Validade é opcional: em branco (o clearable devolve null) vai como null e
-  // apaga o que estava lá. Preenchida, tem de ser um inteiro de dias.
+  // As duas validades são opcionais: em branco (o clearable devolve null) vão
+  // como null e apagam o que estava lá. Preenchidas, têm de ser inteiros de dias.
   const validade = produtoForm.shelf_life_days
-  const semValidade = validade === null || validade === undefined || validade === ''
-  if (!semValidade && !(Number.isInteger(Number(validade)) && Number(validade) > 0)) {
+  const chegada = produtoForm.arrival_shelf_life_days
+  const emBranco = (v) => v === null || v === undefined || v === ''
+  const inteiroPositivo = (v) => Number.isInteger(Number(v)) && Number(v) > 0
+
+  const semValidade = emBranco(validade)
+  const semChegada = emBranco(chegada)
+
+  if (!semValidade && !inteiroPositivo(validade)) {
     $q.notify({
       type: 'warning',
       message: 'Dias de validade deve ser um número inteiro de dias, maior que zero.',
+    })
+    return
+  }
+  if (!semChegada && !inteiroPositivo(chegada)) {
+    $q.notify({
+      type: 'warning',
+      message: 'Validade na chegada deve ser um número inteiro de dias, maior que zero.',
+    })
+    return
+  }
+  // Chegar com mais vida do que o produto tem é troca dos dois campos de lugar —
+  // erro fácil de cometer e que estragaria a estimativa inteira.
+  if (!semValidade && !semChegada && Number(chegada) > Number(validade)) {
+    $q.notify({
+      type: 'warning',
+      message: 'A validade na chegada não pode ser maior que os dias de validade.',
     })
     return
   }
@@ -459,6 +496,7 @@ async function salvarProduto() {
       name: produtoForm.name,
       package_size: Number(produtoForm.package_size),
       shelf_life_days: semValidade ? null : Number(validade),
+      arrival_shelf_life_days: semChegada ? null : Number(chegada),
     }
     const salvo = produtoForm.id
       ? await productsApi.update(produtoForm.id, payload)

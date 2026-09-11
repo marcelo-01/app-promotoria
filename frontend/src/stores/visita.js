@@ -5,6 +5,12 @@ import { merchandisingApi } from '@/api/merchandising'
 const DRAFTS_KEY = 'estoque_drafts'
 const QUEUE_KEY = 'estoque_queue'
 const DONE_KEY = 'estoque_concluidas'
+// Totais já contados hoje em cada cliente, separados por lado. É o que permite
+// somar gôndola + estoque no aparelho, sem perguntar nada ao servidor.
+const TOTAIS_KEY = 'estoque_totais'
+// A coleta de vencimento retida: a contagem que não subiu porque falta digitar
+// as datas.
+const VENCIMENTOS_KEY = 'estoque_vencimentos'
 
 const load = (key) => JSON.parse(localStorage.getItem(key) || '{}')
 const save = (key, value) => localStorage.setItem(key, JSON.stringify(value))
@@ -89,11 +95,17 @@ export const useVisitaStore = defineStore('visita', () => {
   const queue = ref(JSON.parse(localStorage.getItem(QUEUE_KEY) || '[]'))
   // { [customerId|visitType]: { dia, pendente } } — o "já contei aqui hoje"
   const concluidas = ref(dropOldMarks(load(DONE_KEY)))
+  // { [customerId]: { dia, lados: { gondola: {produtoId: unidades}, estoque: {...} } } }
+  const totais = ref(dropOldMarks(load(TOTAIS_KEY)))
+  // { [customerId]: { dia, visit_type, produtos: [...], linhas: {...} } }
+  const vencimentos = ref(dropOldMarks(load(VENCIMENTOS_KEY)))
   const sending = ref(false)
 
   const persist = () => {
     save(DRAFTS_KEY, drafts.value)
     save(DONE_KEY, concluidas.value)
+    save(TOTAIS_KEY, totais.value)
+    save(VENCIMENTOS_KEY, vencimentos.value)
     localStorage.setItem(QUEUE_KEY, JSON.stringify(queue.value))
   }
 
@@ -167,8 +179,116 @@ export const useVisitaStore = defineStore('visita', () => {
   const aguardandoEnvio = (customerId, visitType) =>
     marcaDeHoje(customerId, visitType)?.pendente === true
 
-  /** Fecha a contagem: tenta enviar; se falhar, enfileira para reenvio. */
-  async function submit(customerId, visitType) {
+  // ── Vencimento ──────────────────────────────────────────────────────────
+
+  const outroLado = (visitType) => (visitType === 'gondola' ? 'estoque' : 'gondola')
+
+  /** Marca de hoje deste cliente numa das duas listas por cliente. */
+  const deHoje = (mapa, customerId) =>
+    mapa.value[customerId]?.dia === diaLocal() ? mapa.value[customerId] : null
+
+  /** Guarda o que foi contado neste lado, em unidades, por produto.
+   *  Por LADO e não somado: recontar a gôndola no mesmo dia tem de substituir o
+   *  número da gôndola, não empilhar em cima do que já estava. */
+  function registrarTotais(customerId, visitType, porProduto) {
+    const atual = deHoje(totais, customerId) || { dia: diaLocal(), lados: {} }
+    atual.lados[visitType] = porProduto
+    totais.value[customerId] = atual
+    persist()
+  }
+
+  /**
+   * O total do PAR por produto: o que este lado acabou de contar mais o que o
+   * outro lado já trouxe hoje.
+   *
+   * É este número que a coleta de vencimento reparte em datas — não o de um lado
+   * só. A mercadoria que vence dia 20 pode estar metade na prateleira e metade
+   * no depósito, e o promotor não contou onde cada data está.
+   */
+  function totalDoPar(customerId, visitType, desteLado) {
+    const doOutro = deHoje(totais, customerId)?.lados?.[outroLado(visitType)] || {}
+    const soma = { ...doOutro }
+    Object.entries(desteLado).forEach(([productId, unidades]) => {
+      soma[productId] = (soma[productId] || 0) + unidades
+    })
+    return soma
+  }
+
+  /**
+   * Os produtos que barram este envio — ou lista vazia, se nenhum barra.
+   *
+   * Só decide com o par fechando: enquanto o outro lado não chegou, não existe
+   * total para repartir em datas, e barrar o primeiro lado seria pedir o
+   * vencimento de metade do estoque.
+   *
+   * `products` é a folha que o servidor mandou ao abrir a tela — é de lá que vem
+   * o `collect_expiry`, calculado com o histórico que o aparelho não tem. Aqui
+   * só se cruza aquele aviso com o que acabou de ser contado: produto marcado
+   * que hoje deu zero não tem data nenhuma para ler.
+   */
+  function pendenciaDeVencimento(customerId, visitType, products, desteLado) {
+    if (!concluidaHoje(customerId, outroLado(visitType))) return []
+
+    const total = totalDoPar(customerId, visitType, desteLado)
+    return products
+      .filter((product) => product.collect_expiry && (total[product.id] || 0) > 0)
+      .map((product) => ({
+        product_id: product.id,
+        name: product.name,
+        image_url: product.image_url || null,
+        package_size: Number(product.package_size) || 1,
+        total: total[product.id],
+        expiry_forecast: product.expiry_forecast || null,
+        expiry_reason: product.expiry_reason || null,
+      }))
+  }
+
+  /** Retém a contagem e abre a coleta. O rascunho continua intacto: é ele que
+   *  será enviado quando as datas fecharem, e é ele que segura a contagem se o
+   *  aparelho desligar no meio. */
+  function abrirVencimento(customerId, visitType, produtos, totaisPorProduto) {
+    const anterior = deHoje(vencimentos, customerId)
+    vencimentos.value[customerId] = {
+      dia: diaLocal(),
+      visit_type: visitType,
+      produtos,
+      // O que ESTE lado contou. Fica aqui porque quem vai chamar o envio é a
+      // tela de vencimento, que não tem a folha de produtos para reconverter
+      // caixas em unidades.
+      totais_lado: totaisPorProduto,
+      // Reabrir a coleta não apaga o que já tinha sido digitado nela.
+      linhas: anterior?.linhas || {},
+    }
+    persist()
+  }
+
+  const vencimentoPendente = (customerId) => deHoje(vencimentos, customerId)
+
+  /** As datas digitadas para um produto: [{ expires_at, boxes, units }]. */
+  function setLinhasVencimento(customerId, productId, linhas) {
+    const pendente = deHoje(vencimentos, customerId)
+    if (!pendente) return
+    pendente.linhas[productId] = linhas
+    persist()
+  }
+
+  function fecharVencimento(customerId) {
+    delete vencimentos.value[customerId]
+    persist()
+  }
+
+  // ── Envio ───────────────────────────────────────────────────────────────
+
+  /**
+   * Fecha a contagem: tenta enviar; se falhar, enfileira para reenvio.
+   *
+   * `totaisPorProduto` é o que este lado contou, em unidades — fica guardado no
+   * aparelho para o outro lado somar. `expiries` são as datas coletadas, quando
+   * houve coleta: sobem no MESMO payload da contagem, de propósito. Separá-las
+   * deixaria a contagem subir e a coleta ficar para trás numa fila offline, que
+   * é exatamente o que o bloqueio existe para impedir.
+   */
+  async function submit(customerId, visitType, { totaisPorProduto, expiries } = {}) {
     const draft = getDraft(customerId, visitType)
     const semProdutos = Boolean(draft.no_products)
     const payload = {
@@ -185,8 +305,11 @@ export const useVisitaStore = defineStore('visita', () => {
         boxes: item.boxes || 0,
         units: item.units || 0,
       })),
+      expiries: expiries || [],
       submit: true,
     }
+
+    if (totaisPorProduto) registrarTotais(customerId, visitType, totaisPorProduto)
 
     try {
       await merchandisingApi.saveVisit(payload)
@@ -240,8 +363,10 @@ export const useVisitaStore = defineStore('visita', () => {
   }
 
   return {
-    drafts, queue, concluidas, sending, pendingCount,
+    drafts, queue, concluidas, totais, vencimentos, sending, pendingCount,
     getDraft, setItem, setSemProdutos, itemsCount, clearDraft, submit, flushQueue,
     marcarConcluida, concluidaHoje, aguardandoEnvio,
+    pendenciaDeVencimento, abrirVencimento, vencimentoPendente,
+    setLinhasVencimento, fecharVencimento,
   }
 })

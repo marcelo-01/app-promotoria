@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional, Sequence
 from uuid import UUID
@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.infrastructure.persistence.models.customer import Customer, CustomerStatus
 from app.infrastructure.persistence.models.customer_product import CustomerProduct
 from app.infrastructure.persistence.models.product import Product
+from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.promoter_customer import PromoterCustomer
 from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus,
@@ -242,6 +243,69 @@ class MerchandisingRepository:
         for item in items:
             session.add(item)
         await session.commit()
+
+    @staticmethod
+    async def replace_expiries(
+        session: AsyncSession, visit_id: UUID, expiries: list[ProductExpiry]
+    ) -> None:
+        """Troca as datas coletadas deste envio. Mesmo espírito de `replace_items`:
+        o reenvio offline da mesma contagem substitui, não duplica."""
+        await session.execute(
+            delete(ProductExpiry).where(ProductExpiry.visit_id == visit_id)
+        )
+        for expiry in expiries:
+            session.add(expiry)
+        await session.commit()
+
+    @staticmethod
+    async def list_expiries_for_customer(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
+    ) -> dict[tuple[UUID, UUID], dict[str, list[tuple[date, Decimal]]]]:
+        """Datas já coletadas neste cliente, agrupadas por produto e por dia.
+
+        É neste formato que o razão de lotes as consome: no dia de uma coleta ele
+        troca a fila estimada pelo que o promotor leu na embalagem.
+        """
+        query = select(
+            ProductExpiry.product_id,
+            ProductExpiry.collected_day,
+            ProductExpiry.expires_at,
+            ProductExpiry.quantity,
+        ).where(
+            ProductExpiry.tenant_id == tenant_id,
+            ProductExpiry.customer_id == customer_id,
+            ProductExpiry.collected_day >= since,
+        )
+
+        agrupado: dict[tuple[UUID, UUID], dict[str, list[tuple[date, Decimal]]]] = {}
+        for product_id, dia, vence_em, quantidade in (await session.execute(query)).all():
+            por_dia = agrupado.setdefault((customer_id, product_id), {})
+            por_dia.setdefault(dia.isoformat(), []).append((vence_em, quantidade))
+        return agrupado
+
+    @staticmethod
+    async def list_expiries_for_visits(
+        session: AsyncSession, visit_ids: Sequence[UUID]
+    ) -> dict[UUID, list[tuple[ProductExpiry, Optional[str]]]]:
+        """As datas coletadas em cada envio, com o nome do produto.
+
+        O produto vem pelo JOIN e não dos itens da contagem: a coleta é do PAR, e
+        a mercadoria pode ter sido contada só do outro lado — na gôndola, enquanto
+        este envio é o do estoque.
+        """
+        if not visit_ids:
+            return {}
+
+        query = (
+            select(ProductExpiry, Product.name)
+            .join(Product, Product.id == ProductExpiry.product_id, isouter=True)
+            .where(ProductExpiry.visit_id.in_(list(visit_ids)))
+            .order_by(ProductExpiry.expires_at)
+        )
+        por_visita: dict[UUID, list[tuple[ProductExpiry, Optional[str]]]] = {}
+        for linha, nome in (await session.execute(query)).all():
+            por_visita.setdefault(linha.visit_id, []).append((linha, nome))
+        return por_visita
 
     @staticmethod
     async def list_items(

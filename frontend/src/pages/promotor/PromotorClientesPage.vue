@@ -38,6 +38,24 @@
           </div>
         </q-card-section>
 
+        <!-- Contagem retida: o promotor fechou os dois lados, mas há produto
+             esperando data de vencimento. Enquanto isto estiver aqui, nada
+             daquele cliente subiu — e é por este botão que ele volta. -->
+        <q-card-section v-if="vencimentoPendente(customer.id)" class="q-pt-none q-pb-sm">
+          <q-btn
+            unelevated no-caps class="full-width faixa-vencimento"
+            color="orange-9" icon="schedule" align="left"
+            @click="abrirVencimento(customer)"
+          >
+            <div class="column items-start q-ml-sm">
+              <div class="text-weight-bold">Falta o vencimento</div>
+              <div class="text-caption">
+                A contagem deste cliente não foi enviada. Toque para terminar.
+              </div>
+            </div>
+          </q-btn>
+        </q-card-section>
+
         <q-card-section class="row q-col-gutter-sm q-pt-none">
           <div v-for="tipo in TIPOS" :key="tipo.value" class="col-6">
             <q-btn
@@ -131,6 +149,17 @@ function abrir(customer, tipo) {
   })
 }
 
+/** Coleta de vencimento em aberto hoje neste cliente. */
+const vencimentoPendente = (customerId) => Boolean(visita.vencimentoPendente(customerId))
+
+function abrirVencimento(customer) {
+  router.push({
+    name: 'PromotorVencimento',
+    params: { customerId: customer.id },
+    query: { c: customer.name },
+  })
+}
+
 const ultimaContagem = (customer, tipo) =>
   tipo === 'gondola' ? customer.last_gondola_at : customer.last_estoque_at
 
@@ -182,6 +211,14 @@ onUnmounted(() => clearTimeout(debounce))
    visualmente para o que falta contar saltar aos olhos. */
 .acao-btn--feita {
   opacity: 0.62;
+}
+
+/* Alvo largo e de texto à esquerda: é um aviso que se lê, não um ícone que se
+   reconhece. */
+.faixa-vencimento {
+  border-radius: 12px;
+  padding: 8px 12px;
+  text-align: left;
 }
 
 .marca-feita {

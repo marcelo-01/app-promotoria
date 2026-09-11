@@ -14,7 +14,7 @@ from app.products.schemas import ProductCreate, ProductUpdate
 
 # Campos que podem voltar a ficar em branco: mandar `null` neles apaga o valor,
 # em vez de ser lido como "não mexi neste campo".
-_APAGAVEIS = {"shelf_life_days"}
+_APAGAVEIS = {"shelf_life_days", "arrival_shelf_life_days"}
 
 
 class ProductsService:
@@ -47,6 +47,7 @@ class ProductsService:
             name=payload.name,
             package_size=payload.package_size,
             shelf_life_days=payload.shelf_life_days,
+            arrival_shelf_life_days=payload.arrival_shelf_life_days,
         )
         return await Repo.save(session, product)
 

@@ -77,6 +77,13 @@
           </div>
 
           <div class="foto-nome">{{ product.name }}</div>
+
+          <!-- Aviso, e não bloqueio: o bloqueio é no envio. Aparece aqui para
+               o promotor não ser surpreendido pela tela de datas no fim. -->
+          <q-badge v-if="product.collect_expiry" class="aviso-vencimento" color="orange-9">
+            <q-icon name="schedule" size="13px" class="q-mr-xs" />
+            vencimento
+          </q-badge>
         </div>
 
         <!-- ── Quantidade: um quadrado para caixas, outro para unidades ─ -->
@@ -259,6 +266,29 @@ function limpar(productId) {
 }
 
 function confirmarEnvio() {
+  // Antes de qualquer coisa: o par fechou e há produto que precisa de data?
+  // Então esta contagem NÃO sobe agora. Ela fica no rascunho — onde já estava —
+  // e só sai do aparelho depois que as datas fecharem.
+  const desteLado = totaisPorProduto()
+  const pendentes = visita.pendenciaDeVencimento(
+    props.customerId, tipo.value, products.value, desteLado
+  )
+  if (pendentes.length) {
+    return $q.dialog({
+      title: 'Falta o vencimento',
+      message: `${pendentes.length} produto(s) deste cliente estão há tempo demais `
+        + 'na loja. Colete a data de vencimento deles — a contagem é enviada '
+        + 'logo depois, junto com as datas.',
+      cancel: { label: 'Voltar', flat: true, noCaps: true },
+      ok: { label: 'Coletar', color: 'orange-9', unelevated: true, noCaps: true },
+    }).onOk(() => {
+      visita.abrirVencimento(props.customerId, tipo.value, pendentes, desteLado)
+      router.push({
+        name: 'PromotorVencimento', params: { customerId: props.customerId },
+      })
+    })
+  }
+
   if (semProdutos.value) {
     return $q.dialog({
       title: 'Enviar sem produtos?',
@@ -279,9 +309,31 @@ function confirmarEnvio() {
   }).onOk(enviar)
 }
 
+/**
+ * O que este lado contou, em unidades, por produto.
+ *
+ * A conversão de caixas é feita aqui, com o `package_size` que veio na folha —
+ * é neste número que o total do par se soma e que as datas de vencimento vão ter
+ * de fechar.
+ */
+function totaisPorProduto() {
+  if (semProdutos.value) return {}
+
+  const totais = {}
+  products.value.forEach((product) => {
+    if (!preenchido(product.id)) return
+    const caixas = Number(form[product.id].boxes || 0)
+    const unidades = Number(form[product.id].units || 0)
+    totais[product.id] = caixas * (Number(product.package_size) || 1) + unidades
+  })
+  return totais
+}
+
 async function enviar() {
   enviando.value = true
-  const { sent } = await visita.submit(props.customerId, tipo.value)
+  const { sent } = await visita.submit(props.customerId, tipo.value, {
+    totaisPorProduto: totaisPorProduto(),
+  })
   enviando.value = false
 
   $q.notify({
@@ -463,6 +515,18 @@ function numeroDoCampo(value) {
 
 .foto-vazia {
   height: 100%;
+}
+
+.aviso-vencimento {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  border-radius: 10px;
+  padding: 3px 9px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
 }
 
 .contador {

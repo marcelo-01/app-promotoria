@@ -40,6 +40,18 @@ class CountProductResponse(BaseModel):
     boxes: Optional[Decimal] = None
     units: Optional[Decimal] = None
 
+    # ── Vencimento ────────────────────────────────────────────────────────
+    # O servidor decide QUEM precisa de coleta (é ele que tem o histórico); o
+    # aparelho decide QUANDO barrar, com o total que acabou de ser contado. A
+    # conta não pode depender de rede: o promotor fecha a contagem sem sinal.
+    collect_expiry: bool = False
+    # O que o razão de lotes acha que vence primeiro, e quando. Vai para a tela
+    # como referência — o promotor confere contra a embalagem.
+    expiry_forecast: Optional[date] = None
+    expiry_quantity: Optional[Decimal] = None
+    # 'vence' (a data está chegando) ou 'nao_escoa' (não dá tempo de vender)
+    expiry_reason: Optional[str] = None
+
     model_config = {"from_attributes": True}
 
 
@@ -95,6 +107,20 @@ class StockVisitItemInput(BaseModel):
         return self
 
 
+class ProductExpiryInput(BaseModel):
+    """Uma data encontrada num produto, com quanto vence nela.
+
+    Datas no passado são aceitas de propósito: mercadoria vencida na prateleira é
+    exatamente o que esta coleta existe para achar, e recusá-la deixaria o
+    promotor sem como registrar o que ele está vendo.
+    """
+
+    product_id: UUID
+    expires_at: date
+    boxes: Decimal = Field(default=Decimal(0), ge=0)
+    units: Decimal = Field(default=Decimal(0), ge=0)
+
+
 class StockVisitCreate(BaseModel):
     customer_id: UUID
     visit_type: str = VisitType.ESTOQUE.value
@@ -106,6 +132,13 @@ class StockVisitCreate(BaseModel):
     # fecha o par gôndola + estoque, sem nenhum item. Os itens que porventura
     # venham junto são ignorados — foi isso que ele declarou.
     no_products: bool = False
+    # As datas de vencimento coletadas junto com esta contagem.
+    #
+    # Sobem no MESMO envio, e não numa chamada à parte, porque a tela do promotor
+    # trata as duas como uma coisa só: sem as datas ele não consegue enviar a
+    # contagem. Separá-las abriria a porta para a contagem subir e a coleta ficar
+    # para trás numa fila offline — que é justamente o que o bloqueio evita.
+    expiries: List[ProductExpiryInput] = []
     # true = já envia fechada; false = salva rascunho no servidor
     submit: bool = False
 
@@ -142,6 +175,18 @@ class StockVisitItemResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProductExpiryResponse(BaseModel):
+    id: UUID
+    product_id: UUID
+    product_name: Optional[str] = None
+    expires_at: date
+    boxes: Decimal = Decimal(0)
+    units: Decimal = Decimal(0)
+    quantity: Decimal = Decimal(0)
+
+    model_config = {"from_attributes": True}
+
+
 class StockVisitResponse(BaseModel):
     id: UUID
     tenant_id: UUID
@@ -163,6 +208,9 @@ class StockVisitResponse(BaseModel):
     client_uuid: Optional[str] = None
     items: List[StockVisitItemResponse] = []
     items_count: int = 0
+    # As datas coletadas quando este envio foi fechado. A soma delas por produto
+    # fecha com o total do PAR (gôndola + estoque), não com o desta contagem.
+    expiries: List[ProductExpiryResponse] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

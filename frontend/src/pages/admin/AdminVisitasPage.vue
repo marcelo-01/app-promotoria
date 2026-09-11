@@ -156,6 +156,28 @@
         </div>
 
         <div v-else style="max-height: 60vh; overflow-y: auto">
+          <!-- As datas coletadas vêm ANTES dos dois lados: são do par inteiro,
+               não de um lugar só, e são o motivo pelo qual esta visita rendeu uma
+               ação de escoamento. -->
+          <q-card-section v-if="vencimentos.length" class="q-pb-xs">
+            <q-chip dense square outline color="orange-9" icon="schedule">
+              Vencimentos coletados
+            </q-chip>
+            <q-list separator dense>
+              <q-item v-for="linha in vencimentos" :key="linha.id">
+                <q-item-section>
+                  <q-item-label>{{ linha.product_name || 'Produto removido' }}</q-item-label>
+                  <q-item-label caption :class="corDoVencimento(linha.expires_at)">
+                    vence {{ formatDia(linha.expires_at) }} · {{ prazo(linha.expires_at) }}
+                  </q-item-label>
+                </q-item-section>
+                <q-item-section side class="text-weight-bold text-orange-9">
+                  {{ formatQtd(linha.quantity) }} un
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-card-section>
+
           <template v-for="lado in ['gondola', 'estoque']" :key="lado">
             <q-card-section v-if="detalhe?.[lado]" class="q-pb-xs">
               <q-chip dense square outline
@@ -204,7 +226,7 @@
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { merchandisingApi } from '@/api/merchandising'
 import { usersApi } from '@/api/users'
@@ -273,6 +295,41 @@ async function carregar(props) {
   } finally {
     carregando.value = false
   }
+}
+
+/**
+ * As datas coletadas na visita — as dos dois lados juntas, da mais próxima de
+ * vencer para a mais distante.
+ *
+ * A coleta é do par, mas fica gravada no envio que a trouxe (o segundo dos dois
+ * lados, o que fechou a visita). Por isso os dois lados são lidos e o resultado
+ * é somado: de qual deles a linha veio não diz nada a quem lê.
+ */
+const vencimentos = computed(() => {
+  const linhas = [
+    ...(detalhe.value?.gondola?.expiries || []),
+    ...(detalhe.value?.estoque?.expiries || []),
+  ]
+  return linhas.sort((a, b) => a.expires_at.localeCompare(b.expires_at))
+})
+
+/** Dias entre hoje e a data, em texto curto. */
+function prazo(iso) {
+  const dias = Math.round(
+    (new Date(`${iso}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 86400000
+  )
+  if (dias < 0) return `vencido há ${Math.abs(dias)} dia(s)`
+  if (dias === 0) return 'vence hoje'
+  return `faltam ${dias} dia(s)`
+}
+
+/** Vermelho para o que já venceu ou vence esta semana. */
+function corDoVencimento(iso) {
+  const dias = Math.round(
+    (new Date(`${iso}T00:00:00`) - new Date().setHours(0, 0, 0, 0)) / 86400000
+  )
+  if (dias < 0) return 'text-negative text-weight-bold'
+  return dias <= 7 ? 'text-orange-9 text-weight-bold' : 'text-grey-7'
 }
 
 /** Qualquer mudança de filtro volta para a primeira página. */
