@@ -36,10 +36,12 @@
           ≈ {{ qtd(item.suggested_boxes) }} cx
         </div>
 
+        <!-- Rótulo fixo, e não flutuante: o vendedor precisa ler "fator de
+             giro" antes de tocar, não depois. -->
         <q-input
           v-model.number="fator" type="number" inputmode="decimal"
           outlined dense min="1" max="3" step="0.1" class="campo-fator q-mt-xs"
-          prefix="×" :loading="salvando"
+          label="Fator de giro" stack-label prefix="×" :loading="salvando"
           :error="erro" :error-message="erro ? 'Entre 1 e 3' : ''" hide-bottom-space
           @blur="salvar" @keyup.enter="$event.target.blur()"
         >
@@ -126,7 +128,7 @@ function salvar() {
 }
 
 .campo-fator {
-  width: 96px;
+  width: 118px;
 }
 
 .campo-fator :deep(input) {
