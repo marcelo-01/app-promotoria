@@ -1,12 +1,24 @@
+<!--
+  Quais clientes cada pessoa de campo atende. Promotor e vendedor usam o mesmo
+  vínculo — a mesma tabela, os mesmos endpoints — e por isso a tela é uma só,
+  com um seletor de papel em cima da lista. O promotor conta a loja; o
+  vendedor recebe o pedido sugerido a partir do que o promotor contou.
+-->
 <template>
   <q-page class="q-pa-md row q-col-gutter-md">
     <div class="col-12 col-md-4">
       <q-card flat bordered>
-        <q-card-section class="text-subtitle1">Promotores</q-card-section>
+        <q-card-section class="row items-center justify-between q-py-sm">
+          <div class="text-subtitle1">{{ papel.plural }}</div>
+          <q-btn-toggle
+            v-model="papelAtual" dense no-caps unelevated toggle-color="primary"
+            color="grey-3" text-color="grey-8" :options="opcoesPapel"
+          />
+        </q-card-section>
         <q-separator />
         <q-list separator>
           <q-item
-            v-for="p in promotores" :key="p.id"
+            v-for="p in pessoas" :key="p.id"
             clickable v-ripple :active="p.id === selecionado?.id"
             active-class="bg-blue-1"
             @click="selecionar(p)"
@@ -17,9 +29,9 @@
             </q-item-section>
           </q-item>
 
-          <q-item v-if="!promotores.length">
+          <q-item v-if="!pessoas.length">
             <q-item-section class="text-grey-7 text-caption">
-              Nenhum promotor cadastrado. Crie um em "Cadastros".
+              Nenhum {{ papel.singular }} cadastrado. Crie um em "Cadastros".
             </q-item-section>
           </q-item>
         </q-list>
@@ -62,7 +74,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
 import { merchandisingApi } from '@/api/merchandising'
 import { customersApi } from '@/api/customers'
@@ -70,12 +82,21 @@ import { usersApi } from '@/api/users'
 
 const $q = useQuasar()
 
-const promotores = ref([])
+const PAPEIS = {
+  promoter: { plural: 'Promotores', singular: 'promotor' },
+  seller: { plural: 'Vendedores', singular: 'vendedor' },
+}
+const opcoesPapel = Object.entries(PAPEIS).map(([value, p]) => ({ value, label: p.plural }))
+
+const papelAtual = ref('promoter')
+const pessoas = ref([])
 const clientes = ref([])
 const selecionado = ref(null)
 const marcados = ref([])
 const busca = ref('')
 const salvando = ref(false)
+
+const papel = computed(() => PAPEIS[papelAtual.value])
 
 const filtrados = computed(() => {
   const term = busca.value?.trim().toLowerCase()
@@ -83,9 +104,17 @@ const filtrados = computed(() => {
   return clientes.value.filter((c) => c.name.toLowerCase().includes(term))
 })
 
-async function selecionar(promotor) {
-  selecionado.value = promotor
-  marcados.value = await merchandisingApi.getAssignments(promotor.id)
+async function carregarPessoas() {
+  // Trocar de papel esvazia a seleção: os vínculos marcados eram da pessoa
+  // anterior, e deixá-los na tela seria convidar a salvá-los na errada.
+  selecionado.value = null
+  marcados.value = []
+  pessoas.value = await usersApi.list({ role: papelAtual.value })
+}
+
+async function selecionar(pessoa) {
+  selecionado.value = pessoa
+  marcados.value = await merchandisingApi.getAssignments(pessoa.id)
 }
 
 async function salvar() {
@@ -103,8 +132,10 @@ async function salvar() {
   }
 }
 
+watch(papelAtual, carregarPessoas)
+
 onMounted(async () => {
-  promotores.value = await usersApi.list({ role: 'promoter' })
+  await carregarPessoas()
   clientes.value = await customersApi.list()
 })
 </script>

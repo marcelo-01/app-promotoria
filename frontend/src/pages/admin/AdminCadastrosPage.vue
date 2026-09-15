@@ -10,6 +10,7 @@
       <q-tab name="clientes" label="Clientes" icon="store" />
       <q-tab name="produtos" label="Produtos" icon="inventory_2" />
       <q-tab name="promotores" label="Promotores" icon="badge" />
+      <q-tab name="vendedores" label="Vendedores" icon="storefront" />
       <q-tab name="mix" label="Mix por cliente" icon="checklist" />
     </q-tabs>
 
@@ -83,14 +84,17 @@
         </q-table>
       </q-tab-panel>
 
-      <!-- ── Promotores ─────────────────────────────────────────────── -->
-      <q-tab-panel name="promotores" class="q-pa-none">
+      <!-- ── Promotores e vendedores ────────────────────────────────── -->
+      <!-- O mesmo painel para os dois: são o mesmo cadastro (nome, e-mail e
+           senha), só muda o papel — e o papel é o que decide qual app a
+           pessoa vê ao entrar. -->
+      <q-tab-panel v-for="papel in PAPEIS" :key="papel.role" :name="papel.aba" class="q-pa-none">
         <div class="row justify-end q-mb-sm">
-          <q-btn color="primary" no-caps unelevated icon="add" label="Novo promotor"
-                 @click="abrirPromotor()" />
+          <q-btn color="primary" no-caps unelevated icon="add" :label="`Novo ${papel.singular}`"
+                 @click="abrirUsuario(papel)" />
         </div>
 
-        <q-table :rows="promotores" :columns="colunasPromotor" row-key="id" flat bordered>
+        <q-table :rows="usuarios[papel.role]" :columns="colunasUsuario" row-key="id" flat bordered>
           <template #body-cell-acoes="props">
             <q-td :props="props" class="text-right">
               <q-btn flat dense round icon="key" color="primary"
@@ -262,21 +266,21 @@
       </q-card>
     </q-dialog>
 
-    <!-- ── Diálogo: promotor ────────────────────────────────────────── -->
-    <q-dialog v-model="dialogPromotor">
+    <!-- ── Diálogo: promotor ou vendedor ────────────────────────────── -->
+    <q-dialog v-model="dialogUsuario">
       <q-card style="min-width: 320px; max-width: 480px; width: 90vw">
-        <q-card-section class="text-subtitle1">Novo promotor</q-card-section>
+        <q-card-section class="text-subtitle1">Novo {{ papelNovo.singular }}</q-card-section>
         <q-separator />
         <q-card-section class="q-gutter-sm">
-          <q-input v-model="promotorForm.full_name" outlined dense autofocus label="Nome" />
-          <q-input v-model="promotorForm.email" outlined dense label="E-mail *" type="email" />
-          <q-input v-model="promotorForm.password" outlined dense label="Senha *" type="text"
-                   hint="Mínimo 6 caracteres. O promotor usa este e-mail e senha para entrar." />
+          <q-input v-model="usuarioForm.full_name" outlined dense autofocus label="Nome" />
+          <q-input v-model="usuarioForm.email" outlined dense label="E-mail *" type="email" />
+          <q-input v-model="usuarioForm.password" outlined dense label="Senha *" type="text"
+                   :hint="`Mínimo 6 caracteres. O ${papelNovo.singular} usa este e-mail e senha para entrar.`" />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat no-caps label="Cancelar" v-close-popup />
           <q-btn color="primary" unelevated no-caps label="Criar"
-                 :loading="salvando" @click="salvarPromotor" />
+                 :loading="salvando" @click="salvarUsuario" />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -574,43 +578,53 @@ async function alternarProduto(row, ativo) {
   }
 }
 
-// ── Promotores ──────────────────────────────────────────────────────────
-const promotores = ref([])
-const dialogPromotor = ref(false)
+// ── Promotores e vendedores ─────────────────────────────────────────────
+// Os dois papéis de campo. O promotor conta a loja; o vendedor lê o pedido
+// sugerido a partir do que o promotor contou. Mesmo cadastro, papel diferente.
+const PAPEIS = [
+  { role: 'promoter', aba: 'promotores', singular: 'promotor', criado: 'Promotor criado.' },
+  { role: 'seller', aba: 'vendedores', singular: 'vendedor', criado: 'Vendedor criado.' },
+]
+
+const usuarios = reactive({ promoter: [], seller: [] })
+const dialogUsuario = ref(false)
+const papelNovo = ref(PAPEIS[0])
 const dialogSenha = ref(false)
 const senhaAlvo = ref(null)
 const novaSenha = ref('')
 
-const promotorForm = reactive({ full_name: '', email: '', password: '' })
+const usuarioForm = reactive({ full_name: '', email: '', password: '' })
 
-const colunasPromotor = [
+const colunasUsuario = [
   { name: 'full_name', label: 'Nome', field: 'full_name', align: 'left' },
   { name: 'email', label: 'E-mail', field: 'email', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
 
-async function carregarPromotores() {
-  promotores.value = await usersApi.list({ role: 'promoter' })
+async function carregarUsuarios(role) {
+  usuarios[role] = await usersApi.list({ role })
 }
 
-function abrirPromotor() {
-  Object.assign(promotorForm, { full_name: '', email: '', password: '' })
-  dialogPromotor.value = true
+function abrirUsuario(papel) {
+  papelNovo.value = papel
+  Object.assign(usuarioForm, { full_name: '', email: '', password: '' })
+  dialogUsuario.value = true
 }
 
-async function salvarPromotor() {
-  if (!promotorForm.email || !promotorForm.password) {
+async function salvarUsuario() {
+  if (!usuarioForm.email || !usuarioForm.password) {
     $q.notify({ type: 'warning', message: 'E-mail e senha são obrigatórios.' })
     return
   }
+  const papel = papelNovo.value
   salvando.value = true
   try {
-    await usersApi.create({ ...promotorForm, role: 'promoter' })
-    dialogPromotor.value = false
-    await carregarPromotores()
-    $q.notify({ type: 'positive', message: 'Promotor criado.' })
+    await usersApi.create({ ...usuarioForm, role: papel.role })
+    dialogUsuario.value = false
+    await carregarUsuarios(papel.role)
+    $q.notify({ type: 'positive', message: papel.criado })
   } catch (error) {
-    notifyError(error, 'Erro ao criar promotor')
+    notifyError(error, `Erro ao criar ${papel.singular}`)
   } finally {
     salvando.value = false
   }
@@ -671,7 +685,10 @@ async function salvarMix() {
 }
 
 onMounted(async () => {
-  await Promise.all([carregarClientes(), carregarProdutos(), carregarPromotores()])
+  await Promise.all([
+    carregarClientes(), carregarProdutos(),
+    ...PAPEIS.map((papel) => carregarUsuarios(papel.role)),
+  ])
   clientesFiltradosMix.value = clientes.value
 })
 

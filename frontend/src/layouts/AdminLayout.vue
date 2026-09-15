@@ -65,7 +65,7 @@ const menu = [
   { name: 'AdminDashboard', label: 'Evolução do estoque', icon: 'insights' },
   { name: 'AdminVisitas', label: 'Contagens recebidas', icon: 'inventory' },
   { name: 'AdminFaturamento', label: 'Planilha de faturamento', icon: 'receipt_long' },
-  { name: 'AdminVinculos', label: 'Clientes por promotor', icon: 'link' },
+  { name: 'AdminVinculos', label: 'Clientes por promotor/vendedor', icon: 'link' },
   { name: 'AdminCadastros', label: 'Cadastros', icon: 'folder_shared' },
 ]
 

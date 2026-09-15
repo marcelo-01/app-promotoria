@@ -18,10 +18,24 @@ sozinho na virada do dia. Antes do primeiro produto há um quadrado só — **"n
 produtos aqui"** — para o lugar que hoje está vazio: é o que fecha a contagem sem
 inventar número nenhum.
 
+**Vendedor** (celular): só lê. Escolhe o cliente e vê o **pedido sugerido** — os
+produtos com algo a pedir, cada um com a conta aberta embaixo, e no rodapé a data
+da última coleta de estoque. A sugestão é
+
+    sugestão = venda × fator de giro − estoque atual
+
+onde a venda é a mesma da coleta de vencimento (o que saiu pelo caixa entre as
+duas últimas coletas completas do promotor) e o **fator de giro** (1 a 3, uma
+casa decimal) é o vendedor quem define, cliente a cliente, na segunda aba: 1
+repõe o que vendeu, 2 dobra a cobertura. **Toda semana a tela zera**: sugestão
+só vale se a coleta que a gerou for do domingo mais recente em diante — coleta
+da semana passada mostra um aviso no lugar da lista, para ninguém lançar um
+pedido em cima de número velho.
+
 **Administrador** (desktop): cadastra clientes (só o nome), produtos (nome, foto e
-quantas unidades vêm numa caixa) e promotores (nome, e-mail e senha), define quais
-clientes cada promotor atende, e baixa as contagens em planilha `.xlsx` — já com
-as caixas convertidas em unidades.
+quantas unidades vêm numa caixa), promotores e vendedores (nome, e-mail e senha),
+define quais clientes cada um atende, e baixa as contagens em planilha `.xlsx` —
+já com as caixas convertidas em unidades.
 
 Gôndola e estoque do mesmo cliente são contagens independentes para o promotor:
 cada uma tem sua tela, sua "contagem anterior" e seu visto do dia. Para o
@@ -65,6 +79,7 @@ Usuários criados pelo `seed`:
 |---|---|---|
 | `admin` | `admin` | administrador |
 | `promotor` | `promotor` | promotor |
+| `vendedor` | `vendedor` | vendedor |
 
 ## Primeiro uso
 
@@ -74,14 +89,18 @@ Usuários criados pelo `seed`:
    reconhecer a embalagem na gôndola, então vale tirar uma boa; as unidades por
    caixa são o que converte a contagem na planilha (produto vendido só a granel
    fica com 1).
-3. **Cadastros → Promotores** → crie o promotor com nome, e-mail e senha.
-4. **Clientes por promotor** → marque quais clientes ele atende e salve.
+3. **Cadastros → Promotores** (e **→ Vendedores**) → crie a pessoa com nome, e-mail e senha.
+4. **Clientes por promotor/vendedor** → marque quais clientes cada um atende e salve.
+   O vendedor vê o pedido sugerido só dos clientes vinculados a ele.
 5. *(Opcional)* **Cadastros → Mix por cliente** → escolha quais produtos são
    contados em cada cliente. Sem mix, o promotor vê o catálogo completo.
 6. Entre como o promotor (de preferência no celular) e faça as **duas** contagens
    do cliente — gôndola e estoque. No lugar que estiver vazio, marque o quadrado
    "não tem produtos aqui" em vez de deixar em branco.
 7. Volte ao admin em **Contagens recebidas** e baixe a planilha.
+8. Entre como o vendedor: em **Fator de giro** ajuste o fator de cada cliente e em
+   **Pedidos** veja a sugestão — ela só aparece a partir da **segunda** coleta
+   completa do cliente, porque é da diferença entre duas que sai a venda.
 
 ## Comandos
 
@@ -90,7 +109,7 @@ make up        # sobe os containers
 make down      # derruba
 make logs      # acompanha os logs
 make migrate   # aplica as migrações
-make seed      # cria tenant, admin e promotor de teste
+make seed      # cria tenant, admin, promotor e vendedor de teste
 make reset-db  # zera o banco e refaz migrate + seed
 make shell     # bash dentro do container da API
 ```
@@ -231,9 +250,10 @@ frontend/src/
 ├── api/             # client.js (cópia do ERP), merchandising, customers, products, users
 ├── stores/          # auth e user (cópias do ERP), visita (rascunho + fila offline)
 ├── composables/     # useOfflineQueue — reenvia quando a conexão volta
-├── layouts/         # PromotorLayout (mobile) e AdminLayout (desktop)
+├── layouts/         # PromotorLayout e VendedorLayout (mobile), AdminLayout (desktop)
 └── pages/
     ├── promotor/    # ← migra como bloco para o ERP
+    ├── vendedor/    # pedido sugerido e fator de giro — só leitura
     └── admin/
 ```
 
