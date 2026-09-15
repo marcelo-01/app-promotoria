@@ -16,7 +16,7 @@ _ADMIN = ("admin", "supervisor")
 
 @router.get("", response_model=list[UserResponse])
 async def list_users(
-    role: Optional[str] = Query(None, description="Filtrar por papel: promoter | admin"),
+    role: Optional[str] = Query(None, description="Filtrar por papel: promoter | seller | admin"),
     search: Optional[str] = None,
     active_only: bool = Query(False),
     session: AsyncSession = Depends(get_db_session),

@@ -15,9 +15,10 @@ from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, InvoiceImportResponse,
-    ProductRemovalCreate, ProductRemovalResponse, PromoterCustomerResponse,
-    StockHistoryResponse, StockInsightsResponse, StockVisitCreate,
-    StockVisitListResponse, StockVisitResponse, StockVisitUpdate, VisitPairListResponse,
+    OrderSuggestionResponse, ProductRemovalCreate, ProductRemovalResponse,
+    PromoterCustomerResponse, StockHistoryResponse, StockInsightsResponse,
+    StockVisitCreate, StockVisitListResponse, StockVisitResponse, StockVisitUpdate,
+    TurnoverFactorResponse, TurnoverFactorUpdate, VisitPairListResponse,
 )
 
 # A planilha do ERP é grande, mas não é ilimitada: um arquivo muito maior que
@@ -29,6 +30,9 @@ router = APIRouter(prefix="/merchandising", tags=["merchandising"])
 
 _ADMIN = ("admin", "supervisor")
 _FIELD = ("promoter", "admin", "supervisor")
+# O vendedor lê o que o promotor contou, mas não conta: as rotas de contagem
+# continuam só em `_FIELD`.
+_SELLER = ("seller", "admin", "supervisor")
 
 
 def _validate_visit_type(value: str) -> str:
@@ -46,8 +50,9 @@ def _validate_visit_type(value: str) -> str:
 async def list_my_customers(
     search: Optional[str] = None,
     session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_FIELD)),
+    context: dict = Depends(require_roles(*_FIELD, "seller")),
 ):
+    """Os clientes de quem chamou — promotor ou vendedor, o vínculo é o mesmo."""
     return await MerchandisingService.list_my_customers(
         session, context["tenant_id"], context["user"], search
     )
@@ -344,6 +349,51 @@ async def list_removals(
     )
     return await MerchandisingService.list_removals(
         session, context["tenant_id"], context["user"], customer_id, quando
+    )
+
+
+# ─── Vendedor: fator de giro e sugestão de pedido ─────────────────────────────
+
+@router.get("/turnover-factors", response_model=list[TurnoverFactorResponse])
+async def list_turnover_factors(
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_SELLER)),
+):
+    """Os clientes do vendedor com o fator de giro de cada um."""
+    return await MerchandisingService.list_turnover_factors(
+        session, context["tenant_id"], context["user"]
+    )
+
+
+@router.put("/turnover-factors/{customer_id}", status_code=204)
+async def set_turnover_factor(
+    customer_id: UUID,
+    payload: TurnoverFactorUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_SELLER)),
+):
+    """Grava o fator de giro do vendedor naquele cliente (1 a 3)."""
+    await MerchandisingService.set_turnover_factor(
+        session, context["tenant_id"], context["user"], customer_id, payload.turnover_factor
+    )
+
+
+@router.get(
+    "/customers/{customer_id}/order-suggestion", response_model=OrderSuggestionResponse
+)
+async def get_order_suggestion(
+    customer_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_SELLER)),
+):
+    """O pedido sugerido para o cliente: `venda × fator − estoque atual`, só
+    os produtos com algo a pedir, e a data da coleta de onde a conta saiu.
+
+    Coleta anterior ao domingo mais recente devolve a lista vazia com `stale`
+    ligado — a sugestão da semana passada não vale mais (ver `orders.py`).
+    """
+    return await MerchandisingService.order_suggestion(
+        session, context["tenant_id"], context["user"], customer_id
     )
 
 

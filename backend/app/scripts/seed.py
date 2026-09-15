@@ -28,6 +28,7 @@ async def seed():
         seeds = [
             ("admin", "admin", "Administrador", UserRole.ADMIN),
             ("promotor", "promotor", "Promotor de Teste", UserRole.PROMOTER),
+            ("vendedor", "vendedor", "Vendedor de Teste", UserRole.SELLER),
         ]
 
         for email, password, full_name, role in seeds:

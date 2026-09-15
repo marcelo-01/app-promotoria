@@ -6,12 +6,12 @@ from pydantic import BaseModel, EmailStr, Field, field_validator
 
 
 class UserCreate(BaseModel):
-    """Promotor é nome, e-mail e senha — nada mais."""
+    """Promotor ou vendedor é nome, e-mail e senha — nada mais."""
 
     email: EmailStr
     password: str = Field(..., min_length=6)
     full_name: Optional[str] = Field(default=None, max_length=255)
-    # Papéis aceitos neste app: promoter (padrão) ou admin
+    # Papéis aceitos neste app: promoter (padrão), seller ou admin
     role: str = "promoter"
 
     @field_validator("email")

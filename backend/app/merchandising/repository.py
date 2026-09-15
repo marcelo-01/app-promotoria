@@ -613,6 +613,17 @@ class MerchandisingRepository:
     async def replace_assignments(
         session: AsyncSession, tenant_id: UUID, user_id: UUID, customer_ids: list[UUID]
     ) -> None:
+        # O fator de giro mora na linha do vínculo e é o vendedor quem o define.
+        # Apagar e recriar sem o carregar junto zeraria o trabalho dele toda vez
+        # que o administrador salvasse a lista — mesmo sem tirar cliente nenhum.
+        fatores = dict(
+            (await session.execute(
+                select(PromoterCustomer.customer_id, PromoterCustomer.turnover_factor).where(
+                    PromoterCustomer.tenant_id == tenant_id,
+                    PromoterCustomer.user_id == user_id,
+                )
+            )).all()
+        )
         await session.execute(
             delete(PromoterCustomer).where(
                 PromoterCustomer.tenant_id == tenant_id,
@@ -624,9 +635,73 @@ class MerchandisingRepository:
                 PromoterCustomer(
                     tenant_id=tenant_id, user_id=user_id,
                     customer_id=customer_id, is_active=True,
+                    turnover_factor=fatores.get(customer_id, Decimal(1)),
                 )
             )
         await session.commit()
+
+    # ── Fator de giro (vendedor) ──────────────────────────────────────────
+
+    @staticmethod
+    async def turnover_factor(
+        session: AsyncSession, tenant_id: UUID, user_id: UUID, customer_id: UUID
+    ) -> Optional[Decimal]:
+        """O fator deste usuário neste cliente; `None` se não há vínculo ativo."""
+        query = select(PromoterCustomer.turnover_factor).where(
+            PromoterCustomer.tenant_id == tenant_id,
+            PromoterCustomer.user_id == user_id,
+            PromoterCustomer.customer_id == customer_id,
+            PromoterCustomer.is_active.is_(True),
+        )
+        return (await session.execute(query)).scalar_one_or_none()
+
+    @staticmethod
+    async def list_turnover_factors(
+        session: AsyncSession, tenant_id: UUID, user_id: UUID
+    ) -> Sequence[tuple[Customer, Decimal]]:
+        """Os clientes deste usuário com o fator de cada um, por nome.
+
+        O mesmo join de `list_customers_for_promoter`, só que trazendo a coluna
+        do vínculo junto.
+        """
+        query = (
+            select(Customer, PromoterCustomer.turnover_factor)
+            .join(
+                PromoterCustomer,
+                and_(
+                    PromoterCustomer.customer_id == Customer.id,
+                    PromoterCustomer.tenant_id == tenant_id,
+                    PromoterCustomer.user_id == user_id,
+                    PromoterCustomer.is_active.is_(True),
+                ),
+            )
+            .where(
+                Customer.tenant_id == tenant_id,
+                Customer.status == CustomerStatus.ACTIVE,
+            )
+            .order_by(Customer.name)
+        )
+        return [(customer, fator) for customer, fator in (await session.execute(query)).all()]
+
+    @staticmethod
+    async def set_turnover_factor(
+        session: AsyncSession, tenant_id: UUID, user_id: UUID, customer_id: UUID,
+        factor: Decimal,
+    ) -> bool:
+        """Grava o fator no vínculo. `False` se o vínculo não existe — quem
+        chama decide o que dizer ao usuário."""
+        result = await session.execute(
+            update(PromoterCustomer)
+            .where(
+                PromoterCustomer.tenant_id == tenant_id,
+                PromoterCustomer.user_id == user_id,
+                PromoterCustomer.customer_id == customer_id,
+                PromoterCustomer.is_active.is_(True),
+            )
+            .values(turnover_factor=factor)
+        )
+        await session.commit()
+        return result.rowcount > 0
 
     @staticmethod
     async def replace_mix(

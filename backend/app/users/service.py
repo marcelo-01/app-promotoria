@@ -11,9 +11,9 @@ from app.auth.service import AuthService
 from app.infrastructure.persistence.models.user import User, UserRole
 from app.users.schemas import UserCreate
 
-# Papéis que este app sabe criar. `supervisor` e `seller` existem no enum apenas
-# por compatibilidade com o ERP (Âncora 5) e não são usados aqui.
-_ALLOWED_ROLES = {UserRole.PROMOTER.value, UserRole.ADMIN.value}
+# Papéis que este app sabe criar. `supervisor` existe no enum apenas por
+# compatibilidade com o ERP (Âncora 5) e não é usado aqui.
+_ALLOWED_ROLES = {UserRole.PROMOTER.value, UserRole.SELLER.value, UserRole.ADMIN.value}
 
 
 class UsersService:

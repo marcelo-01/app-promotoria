@@ -18,16 +18,18 @@ from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
-from app.merchandising import consolidation, evolution, expiry, invoices
+from app.merchandising import consolidation, evolution, expiry, invoices, orders
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     CountProductResponse, CountSheetResponse, InvoiceImportResponse,
-    MovedProductResponse, ProductExpiryInput, ProductExpiryResponse,
+    MovedProductResponse, OrderSuggestionItemResponse, OrderSuggestionResponse,
+    ProductExpiryInput, ProductExpiryResponse,
     ProductRemovalCreate, ProductRemovalResponse, PromoterCustomerResponse,
     ShelfGapResponse, StalledProductResponse, UnknownKeyResponse,
     StockCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockPointResponse, StockVisitCreate, StockVisitItemInput, StockVisitItemResponse,
-    StockVisitResponse, StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
+    StockVisitResponse, StockVisitUpdate, TurnoverFactorResponse,
+    VisitPairResponse, VisitPairSideResponse,
 )
 
 # Quanto passado a série precisa cobrir para que as duas últimas contagens
@@ -186,6 +188,27 @@ class MerchandisingService:
         if not vidas:
             return {}
 
+        ciclos, _ = await MerchandisingService._cycle_sales(session, tenant_id, customer_id)
+
+        avisos = {}
+        for product_id, vida in vidas.items():
+            ciclo = ciclos.get(product_id)
+            veredito = expiry.forecast(ciclo, vida) if ciclo else None
+            if veredito and veredito.alert:
+                avisos[product_id] = veredito
+        return avisos
+
+    @staticmethod
+    async def _cycle_sales(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID,
+    ) -> tuple[dict[UUID, expiry.Cycle], Optional[tuple[date, date]]]:
+        """A venda de cada produto deste cliente no último ciclo, e as pontas
+        do ciclo (contagem anterior, contagem atual).
+
+        É a leitura que a coleta de vencimento e a sugestão de pedido dividem:
+        a série de contagens, o recorte do que entrou e do que foi retirado
+        dentro do ciclo, e a conta de `expiry.cycle_sale`.
+        """
         series, _, _ = await MerchandisingService._stock_series(
             session, tenant_id, EXPIRY_WINDOW_DAYS, customer_id
         )
@@ -197,7 +220,7 @@ class MerchandisingService:
             (b for b in (expiry.cycle_bounds(serie) for serie in series) if b), None
         )
         if not janela:
-            return {}
+            return {}, None
 
         anterior, atual = janela
         faturado = await Repo.sum_deliveries_in_cycle(
@@ -213,14 +236,94 @@ class MerchandisingService:
         porta = lambda mapa: {  # noqa: E731
             (customer_id, product_id): total for product_id, total in mapa.items()
         }
-        avisos = expiry.forecasts(
-            series, vidas, porta(faturado), porta(brindes), porta(retirados)
+        ciclos = expiry.cycle_sales(
+            series, porta(faturado), porta(brindes), porta(retirados)
         )
-        return {
-            product_id: veredito
-            for (_, product_id), veredito in avisos.items()
-            if veredito.alert
-        }
+        return {product_id: ciclo for (_, product_id), ciclo in ciclos.items()}, janela
+
+    # ── Vendedor: fator de giro e sugestão de pedido ──────────────────────
+
+    @staticmethod
+    async def list_turnover_factors(
+        session: AsyncSession, tenant_id: UUID, user: User,
+    ) -> list[TurnoverFactorResponse]:
+        return [
+            TurnoverFactorResponse(
+                customer_id=customer.id, customer_name=customer.name, turnover_factor=fator,
+            )
+            for customer, fator in await Repo.list_turnover_factors(session, tenant_id, user.id)
+        ]
+
+    @staticmethod
+    async def set_turnover_factor(
+        session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
+        factor: Decimal,
+    ) -> None:
+        gravou = await Repo.set_turnover_factor(session, tenant_id, user.id, customer_id, factor)
+        if not gravou:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Este cliente não está vinculado a você.",
+            )
+
+    @staticmethod
+    async def order_suggestion(
+        session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
+    ) -> OrderSuggestionResponse:
+        """O pedido sugerido para um cliente: só os produtos com algo a pedir.
+
+        Sem vínculo (o administrador olhando) o fator é 1 — o número que
+        aparece é a reposição pura, sem a opinião de vendedor nenhum.
+        """
+        await MerchandisingService._assert_can_access_customer(
+            session, tenant_id, user, customer_id
+        )
+        customer = await CustomersService.get(session, tenant_id, customer_id)
+        fator = await Repo.turnover_factor(session, tenant_id, user.id, customer_id)
+        fator = fator if fator is not None else Decimal(1)
+
+        ciclos, janela = await MerchandisingService._cycle_sales(session, tenant_id, customer_id)
+        ultima = janela[1] if janela else None
+
+        hoje = date.fromisoformat(consolidation.local_day(datetime.now(timezone.utc)))
+        semana = orders.week_start(hoje)
+        vale = bool(ultima) and orders.is_fresh(ultima, hoje)
+
+        itens = []
+        if vale:
+            catalogo = {
+                p.id: p for p in await Repo.list_all_products(session, tenant_id)
+            }
+            sugestoes = (
+                s for s in (orders.suggest(c, float(fator)) for c in ciclos.values()) if s
+            )
+            for s in sorted(sugestoes, key=lambda s: s.suggested, reverse=True):
+                produto = catalogo.get(s.product_id)
+                caixa = (produto.package_size if produto and produto.package_size else None)
+                itens.append(OrderSuggestionItemResponse(
+                    product_id=s.product_id,
+                    product_name=produto.name if produto else None,
+                    image_url=produto.image_url if produto else None,
+                    package_size=caixa or Decimal(1),
+                    sold=Decimal(str(round(s.sold, 3))),
+                    current_stock=Decimal(str(round(s.current_stock, 3))),
+                    suggested_units=s.suggested,
+                    suggested_boxes=(
+                        Decimal(str(round(s.suggested / float(caixa), 1)))
+                        if caixa and caixa > 1 else None
+                    ),
+                ))
+
+        return OrderSuggestionResponse(
+            customer_id=customer.id,
+            customer_name=customer.name,
+            turnover_factor=fator,
+            last_collection_day=ultima,
+            cycle_days=next(iter(ciclos.values())).cycle_days if ciclos else None,
+            week_start=semana,
+            stale=bool(ultima) and not vale,
+            items=itens,
+        )
 
     # ── Planilha de faturamento ───────────────────────────────────────────
 

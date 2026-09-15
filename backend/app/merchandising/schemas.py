@@ -372,13 +372,60 @@ class VisitPairListResponse(BaseModel):
 
 
 class AssignmentUpdate(BaseModel):
-    """Define o conjunto completo de clientes de um promotor (substitui o anterior)."""
+    """Define o conjunto completo de clientes de um promotor ou vendedor
+    (substitui o anterior)."""
     customer_ids: List[UUID]
 
 
 class CustomerMixUpdate(BaseModel):
     """Define o mix de produtos contados em um cliente, na ordem informada."""
     product_ids: List[UUID]
+
+
+# ─── Vendedor: fator de giro e sugestão de pedido ─────────────────────────────
+
+
+class TurnoverFactorResponse(BaseModel):
+    customer_id: UUID
+    customer_name: str
+    turnover_factor: Decimal
+
+
+class TurnoverFactorUpdate(BaseModel):
+    """De 1 a 3, uma casa decimal. 1 repõe o que vendeu; 3 triplica a cobertura."""
+    turnover_factor: Decimal = Field(..., ge=1, le=3, decimal_places=1)
+
+
+class OrderSuggestionItemResponse(BaseModel):
+    product_id: UUID
+    product_name: Optional[str] = None
+    image_url: Optional[str] = None
+    package_size: Decimal
+
+    # A conta aberta, para o vendedor conferir antes de lançar
+    sold: Decimal
+    current_stock: Decimal
+    suggested_units: int
+    # suggested_units ÷ package_size, só quando o produto vem em caixa
+    suggested_boxes: Optional[Decimal] = None
+
+
+class OrderSuggestionResponse(BaseModel):
+    customer_id: UUID
+    customer_name: str
+    turnover_factor: Decimal
+
+    # A coleta completa (gôndola + estoque) de onde os números saíram. None
+    # quando o cliente ainda não tem duas — sem ciclo, sem venda, sem sugestão.
+    last_collection_day: Optional[date] = None
+    cycle_days: Optional[int] = None
+
+    # O domingo mais recente. Coleta anterior a ele é da semana passada:
+    # `stale` liga e `items` vem vazia, de propósito (ver `orders.py`).
+    week_start: date
+    stale: bool
+
+    items: List[OrderSuggestionItemResponse]
 
 
 
