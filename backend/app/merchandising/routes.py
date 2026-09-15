@@ -18,7 +18,7 @@ from app.merchandising.schemas import (
     OrderSuggestionResponse, ProductRemovalCreate, ProductRemovalResponse,
     PromoterCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockVisitCreate, StockVisitListResponse, StockVisitResponse, StockVisitUpdate,
-    TurnoverFactorResponse, TurnoverFactorUpdate, VisitPairListResponse,
+    TurnoverFactorUpdate, VisitPairListResponse,
 )
 
 # A planilha do ERP é grande, mas não é ilimitada: um arquivo muito maior que
@@ -354,30 +354,6 @@ async def list_removals(
 
 # ─── Vendedor: fator de giro e sugestão de pedido ─────────────────────────────
 
-@router.get("/turnover-factors", response_model=list[TurnoverFactorResponse])
-async def list_turnover_factors(
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_SELLER)),
-):
-    """Os clientes do vendedor com o fator de giro de cada um."""
-    return await MerchandisingService.list_turnover_factors(
-        session, context["tenant_id"], context["user"]
-    )
-
-
-@router.put("/turnover-factors/{customer_id}", status_code=204)
-async def set_turnover_factor(
-    customer_id: UUID,
-    payload: TurnoverFactorUpdate,
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_SELLER)),
-):
-    """Grava o fator de giro do vendedor naquele cliente (1 a 3)."""
-    await MerchandisingService.set_turnover_factor(
-        session, context["tenant_id"], context["user"], customer_id, payload.turnover_factor
-    )
-
-
 @router.get(
     "/customers/{customer_id}/order-suggestion", response_model=OrderSuggestionResponse
 )
@@ -386,14 +362,32 @@ async def get_order_suggestion(
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_SELLER)),
 ):
-    """O pedido sugerido para o cliente: `venda × fator − estoque atual`, só
-    os produtos com algo a pedir, e a data da coleta de onde a conta saiu.
+    """O pedido sugerido para o cliente: `venda × fator − estoque atual` de cada
+    produto com ciclo, do maior pedido para o menor (os de zero no fim), e a
+    data da coleta de onde a conta saiu.
 
     Coleta anterior ao domingo mais recente devolve a lista vazia com `stale`
     ligado — a sugestão da semana passada não vale mais (ver `orders.py`).
     """
     return await MerchandisingService.order_suggestion(
         session, context["tenant_id"], context["user"], customer_id
+    )
+
+
+@router.put(
+    "/customers/{customer_id}/products/{product_id}/turnover-factor", status_code=204
+)
+async def set_turnover_factor(
+    customer_id: UUID,
+    product_id: UUID,
+    payload: TurnoverFactorUpdate,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_SELLER)),
+):
+    """Grava o fator de giro de um produto nesta loja (1 a 3)."""
+    await MerchandisingService.set_turnover_factor(
+        session, context["tenant_id"], context["user"],
+        customer_id, product_id, payload.turnover_factor,
     )
 
 

@@ -18,19 +18,22 @@ sozinho na virada do dia. Antes do primeiro produto há um quadrado só — **"n
 produtos aqui"** — para o lugar que hoje está vazio: é o que fecha a contagem sem
 inventar número nenhum.
 
-**Vendedor** (celular): só lê. Escolhe o cliente e vê o **pedido sugerido** — os
-produtos com algo a pedir, cada um com a conta aberta embaixo, e no rodapé a data
-da última coleta de estoque. A sugestão é
+**Vendedor** (celular): escolhe o cliente e vê o **pedido sugerido** — os
+produtos com algo a pedir, cada um com a conta aberta embaixo (venda, estoque e o
+ciclo de onde a venda saiu), e no rodapé a data da última coleta de estoque. A
+sugestão é
 
     sugestão = venda × fator de giro − estoque atual
 
 onde a venda é a mesma da coleta de vencimento (o que saiu pelo caixa entre as
 duas últimas coletas completas do promotor) e o **fator de giro** (1 a 3, uma
-casa decimal) é o vendedor quem define, cliente a cliente, na segunda aba: 1
-repõe o que vendeu, 2 dobra a cobertura. **Toda semana a tela zera**: sugestão
-só vale se a coleta que a gerou for do domingo mais recente em diante — coleta
-da semana passada mostra um aviso no lugar da lista, para ninguém lançar um
-pedido em cima de número velho.
+casa decimal) é o vendedor quem define, **produto a produto em cada loja**, no
+campo da própria linha: 1 repõe o que vendeu, 2 dobra a cobertura. Os produtos
+que a loja ainda cobre ficam numa seção recolhida embaixo, "Sem sugestão", com o
+mesmo campo — é por ali que ele sobe o fator de um produto que quer pedir mesmo
+assim. **Toda semana a tela zera**: sugestão só vale se a coleta que a gerou for
+do domingo mais recente em diante — coleta da semana passada mostra um aviso no
+lugar da lista, para ninguém lançar um pedido em cima de número velho.
 
 **Administrador** (desktop): cadastra clientes (só o nome), produtos (nome, foto e
 quantas unidades vêm numa caixa), promotores e vendedores (nome, e-mail e senha),
@@ -98,9 +101,9 @@ Usuários criados pelo `seed`:
    do cliente — gôndola e estoque. No lugar que estiver vazio, marque o quadrado
    "não tem produtos aqui" em vez de deixar em branco.
 7. Volte ao admin em **Contagens recebidas** e baixe a planilha.
-8. Entre como o vendedor: em **Fator de giro** ajuste o fator de cada cliente e em
-   **Pedidos** veja a sugestão — ela só aparece a partir da **segunda** coleta
-   completa do cliente, porque é da diferença entre duas que sai a venda.
+8. Entre como o vendedor, escolha o cliente e veja a sugestão — ela só aparece a
+   partir da **segunda** coleta completa do cliente, porque é da diferença entre
+   duas que sai a venda. O fator de giro se ajusta no campo de cada produto.
 
 ## Comandos
 
@@ -253,7 +256,7 @@ frontend/src/
 ├── layouts/         # PromotorLayout e VendedorLayout (mobile), AdminLayout (desktop)
 └── pages/
     ├── promotor/    # ← migra como bloco para o ERP
-    ├── vendedor/    # pedido sugerido e fator de giro — só leitura
+    ├── vendedor/    # pedido sugerido, com o fator de giro por produto na linha
     └── admin/
 ```
 

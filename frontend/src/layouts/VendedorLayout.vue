@@ -1,15 +1,15 @@
 <!--
   Casca do vendedor: o mesmo desenho do promotor (celular, uma mão), sem a
   parte que não lhe diz respeito — não há fila offline nem sincronização,
-  porque o vendedor só lê o que o promotor contou e grava um número por
-  cliente. Duas abas: o pedido sugerido e o fator de giro.
+  porque o vendedor só lê o que o promotor contou e ajusta o fator de giro
+  produto a produto, na própria tela do pedido. Uma tela só; sem abas.
 -->
 <template>
   <q-layout view="hHh lpR fFf">
     <q-header elevated class="bg-primary text-white">
       <q-toolbar>
         <q-toolbar-title class="text-subtitle1 text-weight-medium ellipsis">
-          {{ title }}
+          Pedido sugerido
         </q-toolbar-title>
 
         <q-btn flat dense round icon="more_vert" aria-label="Menu">
@@ -34,40 +34,20 @@
       <router-view />
     </q-page-container>
 
-    <!-- QRouteTab, não QTab: é ele quem navega (ver PromotorLayout). `exact` na
-         aba de pedidos porque /vendedor é prefixo de /vendedor/giro. -->
-    <q-footer elevated class="bg-white text-primary">
-      <q-tabs dense no-caps active-color="primary" indicator-color="primary" class="text-grey-7">
-        <q-route-tab
-          name="pedidos" icon="shopping_cart" label="Pedidos" exact
-          :to="{ name: 'VendedorPedidos' }"
-        />
-        <q-route-tab
-          name="giro" icon="tune" label="Fator de giro"
-          :to="{ name: 'VendedorGiro' }"
-        />
-      </q-tabs>
-    </q-footer>
-
     <TrocarSenhaDialog v-model="dialogSenha" />
   </q-layout>
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import TrocarSenhaDialog from '@/components/TrocarSenhaDialog.vue'
 
-const route = useRoute()
 const router = useRouter()
 const auth = useAuthStore()
 
 const dialogSenha = ref(false)
-
-const title = computed(() =>
-  route.name === 'VendedorGiro' ? 'Fator de giro' : 'Pedido sugerido'
-)
 
 function logout() {
   auth.logout()

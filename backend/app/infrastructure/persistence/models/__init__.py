@@ -11,6 +11,7 @@ from app.infrastructure.persistence.models.delivery import (  # noqa: F401
     ProductRemoval,
 )
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry  # noqa: F401
+from app.infrastructure.persistence.models.turnover_factor import TurnoverFactor  # noqa: F401
 from app.infrastructure.persistence.models.stock_visit import (  # noqa: F401
     StockVisit,
     StockVisitItem,

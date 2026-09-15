@@ -28,9 +28,9 @@ from app.merchandising.schemas import (
     ShelfGapResponse, StalledProductResponse, UnknownKeyResponse,
     StockCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockPointResponse, StockVisitCreate, StockVisitItemInput, StockVisitItemResponse,
-    StockVisitResponse, StockVisitUpdate, TurnoverFactorResponse,
-    VisitPairResponse, VisitPairSideResponse,
+    StockVisitResponse, StockVisitUpdate, VisitPairResponse, VisitPairSideResponse,
 )
+from app.products.service import ProductsService
 
 # Quanto passado a série precisa cobrir para que as duas últimas contagens
 # completas apareçam. A conta usa só o último ciclo, mas um cliente que ficou um
@@ -244,43 +244,30 @@ class MerchandisingService:
     # ── Vendedor: fator de giro e sugestão de pedido ──────────────────────
 
     @staticmethod
-    async def list_turnover_factors(
-        session: AsyncSession, tenant_id: UUID, user: User,
-    ) -> list[TurnoverFactorResponse]:
-        return [
-            TurnoverFactorResponse(
-                customer_id=customer.id, customer_name=customer.name, turnover_factor=fator,
-            )
-            for customer, fator in await Repo.list_turnover_factors(session, tenant_id, user.id)
-        ]
-
-    @staticmethod
     async def set_turnover_factor(
         session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
-        factor: Decimal,
+        product_id: UUID, factor: Decimal,
     ) -> None:
-        gravou = await Repo.set_turnover_factor(session, tenant_id, user.id, customer_id, factor)
-        if not gravou:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Este cliente não está vinculado a você.",
-            )
+        """Grava o fator de um produto numa loja do vendedor."""
+        await MerchandisingService._assert_can_access_customer(
+            session, tenant_id, user, customer_id
+        )
+        # Só para garantir que o produto é deste tenant — 404 se não for.
+        await ProductsService.get(session, tenant_id, product_id)
+        await Repo.set_turnover_factor(session, tenant_id, customer_id, product_id, factor)
 
     @staticmethod
     async def order_suggestion(
         session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
     ) -> OrderSuggestionResponse:
-        """O pedido sugerido para um cliente: só os produtos com algo a pedir.
-
-        Sem vínculo (o administrador olhando) o fator é 1 — o número que
-        aparece é a reposição pura, sem a opinião de vendedor nenhum.
+        """O pedido sugerido para um cliente: todo produto com ciclo, do maior
+        pedido para o menor — os de zero no fim, para o vendedor ver o que a
+        loja ainda cobre e decidir se sobe o fator.
         """
         await MerchandisingService._assert_can_access_customer(
             session, tenant_id, user, customer_id
         )
         customer = await CustomersService.get(session, tenant_id, customer_id)
-        fator = await Repo.turnover_factor(session, tenant_id, user.id, customer_id)
-        fator = fator if fator is not None else Decimal(1)
 
         ciclos, janela = await MerchandisingService._cycle_sales(session, tenant_id, customer_id)
         ultima = janela[1] if janela else None
@@ -294,32 +281,41 @@ class MerchandisingService:
             catalogo = {
                 p.id: p for p in await Repo.list_all_products(session, tenant_id)
             }
-            sugestoes = (
-                s for s in (orders.suggest(c, float(fator)) for c in ciclos.values()) if s
-            )
-            for s in sorted(sugestoes, key=lambda s: s.suggested, reverse=True):
-                produto = catalogo.get(s.product_id)
-                caixa = (produto.package_size if produto and produto.package_size else None)
+            fatores = await Repo.turnover_factors_for_customer(session, tenant_id, customer_id)
+            sugestoes = [
+                orders.suggest(c, float(fatores.get(c.product_id, Decimal(1))))
+                for c in ciclos.values()
+                # Produto inativado depois de contado fica de fora: não se pede
+                # o que saiu de linha.
+                if c.product_id in catalogo
+            ]
+            # Maior pedido primeiro; entre iguais (os zeros, sobretudo), por nome.
+            sugestoes.sort(key=lambda s: (-s.suggested, catalogo[s.product_id].name))
+            for s in sugestoes:
+                produto = catalogo[s.product_id]
+                caixa = produto.package_size if produto.package_size else None
                 itens.append(OrderSuggestionItemResponse(
                     product_id=s.product_id,
-                    product_name=produto.name if produto else None,
-                    image_url=produto.image_url if produto else None,
+                    product_name=produto.name,
+                    image_url=produto.image_url,
                     package_size=caixa or Decimal(1),
+                    cycle_from=s.cycle_from,
+                    cycle_to=s.cycle_to,
+                    cycle_days=s.cycle_days,
                     sold=Decimal(str(round(s.sold, 3))),
                     current_stock=Decimal(str(round(s.current_stock, 3))),
+                    turnover_factor=fatores.get(s.product_id, Decimal(1)),
                     suggested_units=s.suggested,
                     suggested_boxes=(
                         Decimal(str(round(s.suggested / float(caixa), 1)))
-                        if caixa and caixa > 1 else None
+                        if caixa and caixa > 1 and s.suggested else None
                     ),
                 ))
 
         return OrderSuggestionResponse(
             customer_id=customer.id,
             customer_name=customer.name,
-            turnover_factor=fator,
             last_collection_day=ultima,
-            cycle_days=next(iter(ciclos.values())).cycle_days if ciclos else None,
             week_start=semana,
             stale=bool(ultima) and not vale,
             items=itens,

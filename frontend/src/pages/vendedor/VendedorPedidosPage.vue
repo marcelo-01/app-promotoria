@@ -1,10 +1,17 @@
 <!--
-  A tela do vendedor: escolhe o cliente, vê quanto pedir de cada produto.
+  A tela do vendedor: escolhe o cliente, vê quanto pedir de cada produto e
+  ajusta, na própria linha, o fator de giro daquele produto naquela loja.
 
   O número grande é `venda × fator − estoque`, calculado no servidor sobre a
   última coleta completa (gôndola + estoque) do promotor. Embaixo de cada um
-  vai a conta aberta, porque o vendedor conhece a loja e precisa poder
-  discordar do número antes de lançar o pedido.
+  vai a conta aberta — venda, estoque e o ciclo de onde a venda saiu —,
+  porque o vendedor conhece a loja e precisa poder discordar do número antes
+  de lançar o pedido. Mudou o fator, o servidor refaz a conta e a lista se
+  reordena.
+
+  Os produtos que a loja ainda cobre (sugestão zero) ficam numa seção
+  recolhida embaixo: não são pedido, mas é olhando para eles que o vendedor
+  decide subir o fator — e aí sobem para a lista.
 
   A tela zera sozinha toda semana: coleta anterior ao domingo mais recente vem
   do servidor com `stale` e a lista vazia — o que aparece aqui é o aviso e a
@@ -25,7 +32,7 @@
       </template>
     </q-select>
 
-    <div v-if="carregando" class="column items-center q-pa-xl">
+    <div v-if="carregando && !sugestao" class="column items-center q-pa-xl">
       <q-spinner-dots size="40px" color="primary" />
     </div>
 
@@ -51,44 +58,40 @@
         Sem duas, não há venda para calcular.
       </q-banner>
 
-      <q-banner v-else-if="!sugestao.items.length" class="bg-green-1 text-green-10 rounded-borders q-mb-md">
-        <template #avatar><q-icon name="check_circle" color="positive" /></template>
-        Nada a pedir: o estoque da loja cobre a venda com o fator {{ fatorBr }}.
-      </q-banner>
-
-      <div v-else class="column q-gutter-sm">
-        <div class="text-caption text-grey-7 q-px-xs">
-          Venda dos últimos {{ sugestao.cycle_days }} dias × fator {{ fatorBr }}, menos o
-          estoque atual. {{ sugestao.items.length }} produto(s).
+      <template v-else>
+        <div class="text-caption text-grey-7 q-px-xs q-mb-sm">
+          Pedido = venda do ciclo × fator − estoque atual.
+          O fator é seu: 1 repõe o que vendeu, 2 dobra a cobertura (até 3).
         </div>
 
-        <q-card v-for="item in sugestao.items" :key="item.product_id" flat bordered class="item-card">
-          <q-card-section class="row items-center no-wrap q-py-sm">
-            <q-avatar square size="56px" class="q-mr-md foto">
-              <img v-if="mediaUrl(item.image_url)" :src="mediaUrl(item.image_url)" :alt="item.product_name">
-              <q-icon v-else name="inventory_2" color="grey-5" size="32px" />
-            </q-avatar>
+        <q-banner v-if="!comSugestao.length" class="bg-green-1 text-green-10 rounded-borders q-mb-md">
+          <template #avatar><q-icon name="check_circle" color="positive" /></template>
+          Nada a pedir: o estoque da loja cobre a venda de todos os produtos.
+        </q-banner>
 
-            <div class="col">
-              <div class="text-subtitle1 text-weight-bold ellipsis-2-lines">
-                {{ item.product_name || 'Produto' }}
-              </div>
-              <div class="text-caption text-grey-7">
-                vendeu {{ qtd(item.sold) }} · estoque {{ qtd(item.current_stock) }}
-              </div>
-            </div>
+        <div class="column q-gutter-sm">
+          <ProdutoLinha
+            v-for="item in comSugestao" :key="item.product_id"
+            :item="item" @fator="salvarFator"
+          />
+        </div>
 
-            <div class="column items-end q-ml-sm">
-              <div class="text-h5 text-weight-bold text-primary no-wrap">
-                {{ item.suggested_units }} <span class="text-subtitle2">un</span>
-              </div>
-              <div v-if="item.suggested_boxes" class="text-caption text-grey-7 no-wrap">
-                ≈ {{ qtd(item.suggested_boxes) }} cx
-              </div>
-            </div>
-          </q-card-section>
-        </q-card>
-      </div>
+        <!-- Recolhida de propósito: não é pedido. Fica aqui para o vendedor
+             ver o que a loja ainda cobre e, se discordar, subir o fator. -->
+        <q-expansion-item
+          v-if="semSugestao.length"
+          dense expand-separator class="q-mt-md sem-sugestao rounded-borders"
+          icon="inventory" :label="`Sem sugestão (${semSugestao.length})`"
+          caption="O estoque cobre a venda. Suba o fator para pedir mesmo assim."
+        >
+          <div class="column q-gutter-sm q-pa-sm">
+            <ProdutoLinha
+              v-for="item in semSugestao" :key="item.product_id"
+              :item="item" @fator="salvarFator"
+            />
+          </div>
+        </q-expansion-item>
+      </template>
 
       <!-- Sempre visível quando há cliente: é a resposta à pergunta "esses
            números são de quando?" -->
@@ -106,8 +109,8 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { useQuasar } from 'quasar'
-import { mediaUrl } from '@/api/client'
 import { merchandisingApi } from '@/api/merchandising'
+import ProdutoLinha from '@/pages/vendedor/PedidoProdutoLinha.vue'
 
 const $q = useQuasar()
 
@@ -118,12 +121,12 @@ const carregandoClientes = ref(false)
 const carregando = ref(false)
 const sugestao = ref(null)
 
-const fatorBr = computed(() =>
-  sugestao.value ? Number(sugestao.value.turnover_factor).toLocaleString('pt-BR') : ''
+const comSugestao = computed(() =>
+  (sugestao.value?.items || []).filter((i) => i.suggested_units > 0)
 )
-
-/** Números vêm como string decimal; mostra sem casas quando são inteiros. */
-const qtd = (valor) => Number(valor).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
+const semSugestao = computed(() =>
+  (sugestao.value?.items || []).filter((i) => i.suggested_units === 0)
+)
 
 /** 'AAAA-MM-DD' → 'DD/MM/AAAA' sem passar por Date (que leria como UTC). */
 const dataBr = (dia) => dia.split('-').reverse().join('/')
@@ -147,7 +150,7 @@ const todasOpcoes = () => clientes.value.map((c) => ({ label: c.name, value: c.i
 
 function filtrar(texto, update) {
   update(() => {
-    const termo = texto.trim().toLowerCase()
+    const termo = (texto || '').trim().toLowerCase()
     opcoes.value = termo
       ? todasOpcoes().filter((o) => o.label.toLowerCase().includes(termo))
       : todasOpcoes()
@@ -173,6 +176,25 @@ async function carregarSugestao(id) {
   }
 }
 
+/**
+ * Grava o fator e pede a lista de novo: quem refaz a conta é o servidor, e a
+ * ordem pode mudar — um produto que estava em "sem sugestão" pode subir.
+ * A linha avisa por `done(ok)` para acender o visto ou voltar ao valor antigo.
+ */
+async function salvarFator({ item, fator, done }) {
+  try {
+    await merchandisingApi.setTurnoverFactor(clienteId.value, item.product_id, fator)
+    done(true)
+    await carregarSugestao(clienteId.value)
+  } catch (error) {
+    done(false)
+    $q.notify({
+      type: 'negative',
+      message: error.response?.data?.detail || 'Não foi possível salvar o fator',
+    })
+  }
+}
+
 watch(clienteId, carregarSugestao)
 
 onMounted(carregarClientes)
@@ -183,17 +205,14 @@ onMounted(carregarClientes)
   min-height: 100%;
 }
 
-.item-card {
-  border-radius: 12px;
+.sem-sugestao {
+  border: 1px solid #e0e4ea;
+  background: #fff;
 }
 
-.foto {
-  border-radius: 8px;
-  background: #f0f2f5;
-}
-
-.foto img {
-  object-fit: cover;
+.body--dark .sem-sugestao {
+  border-color: rgba(255, 255, 255, 0.15);
+  background: #1e1e2e;
 }
 
 .rodape-coleta {

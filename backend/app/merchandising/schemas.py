@@ -385,12 +385,6 @@ class CustomerMixUpdate(BaseModel):
 # ─── Vendedor: fator de giro e sugestão de pedido ─────────────────────────────
 
 
-class TurnoverFactorResponse(BaseModel):
-    customer_id: UUID
-    customer_name: str
-    turnover_factor: Decimal
-
-
 class TurnoverFactorUpdate(BaseModel):
     """De 1 a 3, uma casa decimal. 1 repõe o que vendeu; 3 triplica a cobertura."""
     turnover_factor: Decimal = Field(..., ge=1, le=3, decimal_places=1)
@@ -402,9 +396,18 @@ class OrderSuggestionItemResponse(BaseModel):
     image_url: Optional[str] = None
     package_size: Decimal
 
-    # A conta aberta, para o vendedor conferir antes de lançar
+    # A conta aberta, para o vendedor conferir antes de lançar: o ciclo (as
+    # duas coletas e os dias entre elas), a venda nele, o estoque de agora e o
+    # fator que ele mesmo definiu para este produto nesta loja.
+    cycle_from: date
+    cycle_to: date
+    cycle_days: int
     sold: Decimal
     current_stock: Decimal
+    turnover_factor: Decimal
+
+    # 0 = o estoque cobre a venda. O produto vem mesmo assim, porque é olhando
+    # para ele que o vendedor decide subir o fator.
     suggested_units: int
     # suggested_units ÷ package_size, só quando o produto vem em caixa
     suggested_boxes: Optional[Decimal] = None
@@ -413,18 +416,17 @@ class OrderSuggestionItemResponse(BaseModel):
 class OrderSuggestionResponse(BaseModel):
     customer_id: UUID
     customer_name: str
-    turnover_factor: Decimal
 
     # A coleta completa (gôndola + estoque) de onde os números saíram. None
     # quando o cliente ainda não tem duas — sem ciclo, sem venda, sem sugestão.
     last_collection_day: Optional[date] = None
-    cycle_days: Optional[int] = None
 
     # O domingo mais recente. Coleta anterior a ele é da semana passada:
     # `stale` liga e `items` vem vazia, de propósito (ver `orders.py`).
     week_start: date
     stale: bool
 
+    # Do maior pedido para o menor; os de zero no fim.
     items: List[OrderSuggestionItemResponse]
 
 

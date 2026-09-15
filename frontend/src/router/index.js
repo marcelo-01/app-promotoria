@@ -68,11 +68,6 @@ export const vendedorRoutes = [
         name: 'VendedorPedidos',
         component: () => import('@/pages/vendedor/VendedorPedidosPage.vue'),
       },
-      {
-        path: 'giro',
-        name: 'VendedorGiro',
-        component: () => import('@/pages/vendedor/VendedorGiroPage.vue'),
-      },
     ],
   },
 ]

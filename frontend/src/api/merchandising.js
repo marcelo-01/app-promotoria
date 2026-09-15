@@ -80,9 +80,10 @@ export const merchandisingApi = {
 
   // ── Vendedor ──────────────────────────────────────────────────────────
 
-  /** O pedido sugerido para um cliente: só os produtos com algo a pedir, a
-   *  conta aberta de cada um e a data da coleta de onde os números saíram.
-   *  Coleta da semana passada vem com `stale` e a lista vazia. */
+  /** O pedido sugerido para um cliente: todo produto com ciclo, do maior
+   *  pedido para o menor (os de zero no fim), com a conta aberta de cada um e
+   *  a data da coleta de onde os números saíram. Coleta da semana passada vem
+   *  com `stale` e a lista vazia. */
   async orderSuggestion(customerId) {
     const { data } = await apiClient.get(
       `/merchandising/customers/${customerId}/order-suggestion`
@@ -90,16 +91,12 @@ export const merchandisingApi = {
     return data
   },
 
-  /** Os clientes do vendedor com o fator de giro de cada um. */
-  async turnoverFactors() {
-    const { data } = await apiClient.get('/merchandising/turnover-factors')
-    return data
-  },
-
-  async setTurnoverFactor(customerId, factor) {
-    await apiClient.put(`/merchandising/turnover-factors/${customerId}`, {
-      turnover_factor: factor,
-    })
+  /** O fator de giro de um produto numa loja (1 a 3, uma casa decimal). */
+  async setTurnoverFactor(customerId, productId, factor) {
+    await apiClient.put(
+      `/merchandising/customers/${customerId}/products/${productId}/turnover-factor`,
+      { turnover_factor: factor }
+    )
   },
 
   // ── Administrador ─────────────────────────────────────────────────────
