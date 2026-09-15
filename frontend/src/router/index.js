@@ -56,6 +56,27 @@ export const promotorRoutes = [
   },
 ]
 
+// ── Rotas do vendedor: só leitura do que o promotor contou ────────────────
+export const vendedorRoutes = [
+  {
+    path: '/vendedor',
+    component: () => import('@/layouts/VendedorLayout.vue'),
+    meta: { requiresAuth: true, requiresRoles: ['seller', 'admin', 'supervisor'] },
+    children: [
+      {
+        path: '',
+        name: 'VendedorPedidos',
+        component: () => import('@/pages/vendedor/VendedorPedidosPage.vue'),
+      },
+      {
+        path: 'giro',
+        name: 'VendedorGiro',
+        component: () => import('@/pages/vendedor/VendedorGiroPage.vue'),
+      },
+    ],
+  },
+]
+
 // ── Rotas do administrador: viram filhas do MainLayout do ERP ─────────────
 export const adminRoutes = [
   {
@@ -101,14 +122,22 @@ const routes = [
     meta: { requiresAuth: false },
   },
   ...promotorRoutes,
+  ...vendedorRoutes,
   ...adminRoutes,
   // A raiz redireciona conforme o papel — ver guard abaixo
-  { path: '/', redirect: () => (roleOf() === 'promoter' ? '/promotor' : '/admin') },
+  { path: '/', redirect: () => homeFor(roleOf()) },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
 function roleOf() {
   return JSON.parse(localStorage.getItem('user') || 'null')?.role
+}
+
+/** A tela inicial de cada papel — a mesma conta no login, na raiz e no guard. */
+export function homeFor(role) {
+  if (role === 'promoter') return '/promotor'
+  if (role === 'seller') return '/vendedor'
+  return '/admin'
 }
 
 const router = createRouter({
@@ -128,7 +157,7 @@ router.beforeEach((to, from, next) => {
   if (requiresAuth && !authStore.isAuthenticated) {
     next('/login')
   } else if (requiredRoles.length > 0 && !requiredRoles.includes(role)) {
-    next(role === 'promoter' ? '/promotor' : '/admin')
+    next(homeFor(role))
   } else if (to.path === '/login' && authStore.isAuthenticated) {
     next('/')
   } else {

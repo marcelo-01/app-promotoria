@@ -78,6 +78,30 @@ export const merchandisingApi = {
     return data
   },
 
+  // ── Vendedor ──────────────────────────────────────────────────────────
+
+  /** O pedido sugerido para um cliente: só os produtos com algo a pedir, a
+   *  conta aberta de cada um e a data da coleta de onde os números saíram.
+   *  Coleta da semana passada vem com `stale` e a lista vazia. */
+  async orderSuggestion(customerId) {
+    const { data } = await apiClient.get(
+      `/merchandising/customers/${customerId}/order-suggestion`
+    )
+    return data
+  },
+
+  /** Os clientes do vendedor com o fator de giro de cada um. */
+  async turnoverFactors() {
+    const { data } = await apiClient.get('/merchandising/turnover-factors')
+    return data
+  },
+
+  async setTurnoverFactor(customerId, factor) {
+    await apiClient.put(`/merchandising/turnover-factors/${customerId}`, {
+      turnover_factor: factor,
+    })
+  },
+
   // ── Administrador ─────────────────────────────────────────────────────
 
   /**

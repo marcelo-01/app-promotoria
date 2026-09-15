@@ -56,6 +56,7 @@ import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 import { useUserStore } from '@/stores/user'
+import { homeFor } from '@/router'
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -82,8 +83,8 @@ async function handleLogin() {
     })
     const user = await userStore.fetchCurrentUser()
 
-    // O promotor vai direto para a lista de clientes; o admin, para as contagens
-    router.push(user?.role === 'promoter' ? '/promotor' : '/admin')
+    // Cada papel cai na sua tela inicial: clientes, pedidos ou contagens
+    router.push(homeFor(user?.role))
   } catch (error) {
     errorMessage.value =
       error.response?.status === 401
