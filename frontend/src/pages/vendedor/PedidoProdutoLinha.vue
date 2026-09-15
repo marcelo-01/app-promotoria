@@ -26,6 +26,23 @@
           ciclo {{ dataCurta(item.cycle_from) }} → {{ dataCurta(item.cycle_to) }}
           ({{ item.cycle_days }} {{ item.cycle_days === 1 ? 'dia' : 'dias' }})
         </div>
+
+        <!-- As datas que o promotor leu na embalagem, quando leu. Vencida fica
+             em vermelho: é mercadoria que ainda está na loja e não vai vender. -->
+        <div v-if="item.expiries.length" class="text-caption q-mt-xs validade">
+          <q-icon name="event" size="14px" class="q-mr-xs" />
+          <span class="text-grey-8">validade</span>
+          <span v-if="item.expiry_collected_day !== item.cycle_to" class="text-grey-7">
+            (lida em {{ dataCurta(item.expiry_collected_day) }})</span>:
+          <template v-for="(lote, i) in item.expiries" :key="lote.expires_at">
+            <span v-if="i" class="text-grey-5"> · </span>
+            <span :class="vencido(lote.expires_at) ? 'text-negative text-weight-bold' : 'text-grey-8'">
+              {{ dataCurta(lote.expires_at) }}
+              <span class="text-grey-7">({{ qtd(lote.quantity) }} un)</span>
+              <template v-if="vencido(lote.expires_at)"> — vencido</template>
+            </span>
+          </template>
+        </div>
       </div>
 
       <div class="column items-end q-ml-sm no-wrap">
@@ -80,6 +97,10 @@ const qtd = (valor) => Number(valor).toLocaleString('pt-BR', { maximumFractionDi
 /** 'AAAA-MM-DD' → 'DD/MM' sem passar por Date (que leria como UTC). */
 const dataCurta = (dia) => dia.slice(8, 10) + '/' + dia.slice(5, 7)
 
+/** Já passou? Compara as strings ISO com o dia local de hoje — sem fuso. */
+const hojeIso = new Date().toLocaleDateString('sv-SE')
+const vencido = (dia) => dia < hojeIso
+
 /** Uma casa decimal, entre 1 e 3 — o que o servidor aceita. */
 function normalizar(valor) {
   const n = Math.round(Number(valor) * 10) / 10
@@ -125,6 +146,10 @@ function salvar() {
 
 .foto img {
   object-fit: cover;
+}
+
+.validade {
+  line-height: 1.5;
 }
 
 .campo-fator {

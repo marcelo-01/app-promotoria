@@ -22,7 +22,8 @@ from app.merchandising import consolidation, evolution, expiry, invoices, orders
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     CountProductResponse, CountSheetResponse, InvoiceImportResponse,
-    MovedProductResponse, OrderSuggestionItemResponse, OrderSuggestionResponse,
+    ExpiryLotResponse, MovedProductResponse, OrderSuggestionItemResponse,
+    OrderSuggestionResponse,
     ProductExpiryInput, ProductExpiryResponse,
     ProductRemovalCreate, ProductRemovalResponse, PromoterCustomerResponse,
     ShelfGapResponse, StalledProductResponse, UnknownKeyResponse,
@@ -260,9 +261,10 @@ class MerchandisingService:
     async def order_suggestion(
         session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
     ) -> OrderSuggestionResponse:
-        """O pedido sugerido para um cliente: todo produto com ciclo, do maior
-        pedido para o menor — os de zero no fim, para o vendedor ver o que a
-        loja ainda cobre e decidir se sobe o fator.
+        """O pedido sugerido para um cliente: todo produto com ciclo, em ordem
+        alfabética — os de zero também, para o vendedor ver o que a loja ainda
+        cobre e decidir se sobe o fator. Com as datas de validade que o
+        promotor leu, quando leu.
         """
         await MerchandisingService._assert_can_access_customer(
             session, tenant_id, user, customer_id
@@ -282,6 +284,12 @@ class MerchandisingService:
                 p.id: p for p in await Repo.list_all_products(session, tenant_id)
             }
             fatores = await Repo.turnover_factors_for_customer(session, tenant_id, customer_id)
+            # A mesma janela da série: coleta mais velha que isso não tem
+            # contagem para se apoiar.
+            validades = await Repo.latest_expiries_for_customer(
+                session, tenant_id, customer_id,
+                since=hoje - timedelta(days=EXPIRY_WINDOW_DAYS),
+            )
             sugestoes = [
                 orders.suggest(c, float(fatores.get(c.product_id, Decimal(1))))
                 for c in ciclos.values()
@@ -289,11 +297,13 @@ class MerchandisingService:
                 # o que saiu de linha.
                 if c.product_id in catalogo
             ]
-            # Maior pedido primeiro; entre iguais (os zeros, sobretudo), por nome.
-            sugestoes.sort(key=lambda s: (-s.suggested, catalogo[s.product_id].name))
+            # Alfabética, e não por tamanho do pedido: é a ordem em que o
+            # vendedor lança — e a lista não pula de lugar a cada fator mexido.
+            sugestoes.sort(key=lambda s: catalogo[s.product_id].name)
             for s in sugestoes:
                 produto = catalogo[s.product_id]
                 caixa = produto.package_size if produto.package_size else None
+                dia_validade, lotes = validades.get(s.product_id, (None, []))
                 itens.append(OrderSuggestionItemResponse(
                     product_id=s.product_id,
                     product_name=produto.name,
@@ -310,6 +320,11 @@ class MerchandisingService:
                         Decimal(str(round(s.suggested / float(caixa), 1)))
                         if caixa and caixa > 1 and s.suggested else None
                     ),
+                    expiry_collected_day=dia_validade,
+                    expiries=[
+                        ExpiryLotResponse(expires_at=vence, quantity=quantidade)
+                        for vence, quantidade in lotes
+                    ],
                 ))
 
         return OrderSuggestionResponse(

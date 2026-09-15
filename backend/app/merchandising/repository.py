@@ -397,6 +397,49 @@ class MerchandisingRepository:
         return (await session.execute(query)).all()
 
     @staticmethod
+    async def latest_expiries_for_customer(
+        session: AsyncSession, tenant_id: UUID, customer_id: UUID, since: date
+    ) -> dict[UUID, tuple[date, list[tuple[date, Decimal]]]]:
+        """{product_id: (dia da coleta, [(vence em, quantidade), ...])} — a
+        coleta de validade MAIS RECENTE de cada produto neste cliente.
+
+        Só a mais recente, e de UM envio só: a coleta anterior descreve
+        mercadoria que já foi em parte vendida, e um segundo envio do mesmo dia
+        (reenvio com outro `client_uuid`) repetiria as mesmas linhas — somar
+        qualquer um dos dois contaria o mesmo lote duas vezes. O dia da coleta
+        vai junto para a tela dizer de quando é a informação.
+        """
+        query = (
+            select(
+                ProductExpiry.product_id, ProductExpiry.visit_id,
+                ProductExpiry.collected_day, ProductExpiry.expires_at,
+                ProductExpiry.quantity,
+            )
+            .where(
+                ProductExpiry.tenant_id == tenant_id,
+                ProductExpiry.customer_id == customer_id,
+                ProductExpiry.collected_day >= since,
+            )
+            .order_by(
+                ProductExpiry.product_id, ProductExpiry.collected_day.desc(),
+                ProductExpiry.created_at.desc(), ProductExpiry.expires_at,
+            )
+        )
+        saida: dict[UUID, tuple[date, list[tuple[date, Decimal]]]] = {}
+        envio_que_vale: dict[UUID, UUID] = {}
+        for product_id, visit_id, dia, vence, quantidade in (await session.execute(query)).all():
+            if product_id not in envio_que_vale:
+                envio_que_vale[product_id] = visit_id
+                saida[product_id] = (dia, [])
+            if visit_id == envio_que_vale[product_id]:
+                saida[product_id][1].append((vence, quantidade))
+        # Do que vence primeiro para o que vence depois — `created_at` desempata
+        # o envio, mas não ordena as linhas dentro dele.
+        for _, lotes in saida.values():
+            lotes.sort()
+        return saida
+
+    @staticmethod
     async def list_expiries_for_visits(
         session: AsyncSession, visit_ids: Sequence[UUID]
     ) -> dict[UUID, list[tuple[ProductExpiry, Optional[str]]]]:

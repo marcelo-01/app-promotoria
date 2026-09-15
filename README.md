@@ -19,8 +19,9 @@ produtos aqui"** — para o lugar que hoje está vazio: é o que fecha a contage
 inventar número nenhum.
 
 **Vendedor** (celular): escolhe o cliente e vê o **pedido sugerido** — os
-produtos com algo a pedir, cada um com a conta aberta embaixo (venda, estoque e o
-ciclo de onde a venda saiu), e no rodapé a data da última coleta de estoque. A
+produtos em ordem alfabética, cada um com a conta aberta embaixo (venda, estoque, o
+ciclo de onde a venda saiu e, se o promotor leu, as datas de validade na loja), e no
+rodapé a data da última coleta de estoque. A
 sugestão é
 
     sugestão = venda × fator de giro − estoque atual

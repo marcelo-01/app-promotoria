@@ -390,6 +390,12 @@ class TurnoverFactorUpdate(BaseModel):
     turnover_factor: Decimal = Field(..., ge=1, le=3, decimal_places=1)
 
 
+class ExpiryLotResponse(BaseModel):
+    """Uma data lida na embalagem e quanto havia dela."""
+    expires_at: date
+    quantity: Decimal
+
+
 class OrderSuggestionItemResponse(BaseModel):
     product_id: UUID
     product_name: Optional[str] = None
@@ -412,6 +418,12 @@ class OrderSuggestionItemResponse(BaseModel):
     # suggested_units ÷ package_size, só quando o produto vem em caixa
     suggested_boxes: Optional[Decimal] = None
 
+    # As datas de validade que o promotor leu na loja, na coleta mais recente
+    # em que este produto entrou. Vazio quando nunca entrou. O dia da coleta
+    # vai junto: pode ser anterior à contagem de onde os números saíram.
+    expiry_collected_day: Optional[date] = None
+    expiries: List[ExpiryLotResponse] = []
+
 
 class OrderSuggestionResponse(BaseModel):
     customer_id: UUID
@@ -426,7 +438,7 @@ class OrderSuggestionResponse(BaseModel):
     week_start: date
     stale: bool
 
-    # Do maior pedido para o menor; os de zero no fim.
+    # Em ordem alfabética — a ordem em que o vendedor lança o pedido.
     items: List[OrderSuggestionItemResponse]
 
 
