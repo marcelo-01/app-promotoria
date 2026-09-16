@@ -118,6 +118,14 @@ export const merchandisingApi = {
     return enviarPlanilha(`/merchandising/invoices/import?kind=${kind}`, file)
   },
 
+  /** As planilhas desta origem que já entraram, da mais recente para a mais
+   *  antiga — é o que responde "essa eu já mandei?". */
+  async listInvoiceImports(kind = 'venda') {
+    const { data } = await apiClient.get('/merchandising/invoices/imports', {
+      params: { kind },
+    })
+    return data
+  },
 
   /** Os indicadores de evolução do estoque: parados, sumidos, voltados e
    *  gôndola vazia com saldo no depósito. Tudo é variação entre contagens —

@@ -14,7 +14,8 @@ from app.infrastructure.persistence.session import get_db_session
 from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, InvoiceImportResponse,
+    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate,
+    InvoiceImportRecordResponse, InvoiceImportResponse,
     OrderSuggestionResponse, ProductRemovalCreate, ProductRemovalResponse,
     PromoterCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockVisitCreate, StockVisitListResponse, StockVisitResponse, StockVisitUpdate,
@@ -427,6 +428,20 @@ async def import_invoices(
     return await MerchandisingService.import_invoices(
         session, context["tenant_id"], await _ler_planilha(file),
         save=True, kind=_validate_kind(kind),
+        file_name=file.filename or "", user=context["user"],
+    )
+
+
+@router.get("/invoices/imports", response_model=list[InvoiceImportRecordResponse])
+async def list_invoice_imports(
+    kind: str = Query(default="venda", description="venda (faturamento) ou brinde"),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    """As planilhas desta origem que já entraram — o que a tela lista embaixo
+    do campo de anexar."""
+    return await MerchandisingService.list_invoice_imports(
+        session, context["tenant_id"], _validate_kind(kind)
     )
 
 

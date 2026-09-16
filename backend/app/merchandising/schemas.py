@@ -138,6 +138,23 @@ class InvoiceImportResponse(BaseModel):
     by_reason: List[UnknownKeyResponse] = []
 
 
+class InvoiceImportRecordResponse(BaseModel):
+    """Uma planilha que já entrou — o que a tela lista embaixo do campo de
+    anexar para responder "essa eu já mandei?"."""
+
+    id: UUID
+    kind: str
+    file_name: str
+    imported_at: Optional[datetime] = None
+    # Nome (ou e-mail) de quem anexou; nulo se o usuário foi apagado.
+    imported_by: Optional[str] = None
+    first_day: Optional[date] = None
+    last_day: Optional[date] = None
+    total_lines: int = 0
+    matched_lines: int = 0
+    matched_quantity: Decimal = Decimal(0)
+
+
 # ─── Vencido retirado da loja ─────────────────────────────────────────────────
 
 

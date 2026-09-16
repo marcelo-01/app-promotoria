@@ -60,6 +60,60 @@
         </div>
       </q-card-section>
 
+      <!-- ── O que já entrou ───────────────────────────────────────────── -->
+      <q-separator />
+      <q-card-section class="q-pb-none">
+        <div class="row items-center no-wrap">
+          <div class="col text-subtitle2 text-weight-bold">
+            Planilhas de {{ origemAtual.label.toLowerCase() }} já importadas
+          </div>
+          <q-chip v-if="importadas.length" dense square color="positive" text-color="white">
+            {{ importadas.length }}
+          </q-chip>
+        </div>
+        <div class="text-caption text-grey-7">
+          Cada linha é um arquivo que entrou no sistema. Se a sua não está aqui,
+          ela ainda não foi importada.
+        </div>
+      </q-card-section>
+
+      <q-card-section v-if="carregandoImportadas && !importadas.length" class="text-caption text-grey-6">
+        <q-spinner-dots size="18px" color="primary" /> Buscando…
+      </q-card-section>
+
+      <q-card-section v-else-if="!importadas.length" class="text-caption text-grey-6">
+        <q-icon name="inbox" /> Nenhuma planilha de
+        {{ origemAtual.label.toLowerCase() }} foi importada ainda.
+      </q-card-section>
+
+      <q-list v-else separator dense style="max-height: 320px; overflow-y: auto">
+        <q-item
+          v-for="(imp, i) in importadas" :key="imp.id"
+          :class="{ 'bg-green-1': i === 0 && recemImportada === imp.id }"
+        >
+          <q-item-section avatar>
+            <q-icon name="task" color="positive" />
+          </q-item-section>
+          <q-item-section>
+            <q-item-label class="text-weight-medium ellipsis">{{ imp.file_name }}</q-item-label>
+            <q-item-label caption>
+              {{ formatQuando(imp.imported_at) }}
+              <span v-if="imp.imported_by"> · por {{ imp.imported_by }}</span>
+              <span v-if="imp.first_day">
+                · período {{ formatDia(imp.first_day) }}<template
+                  v-if="imp.last_day !== imp.first_day"> a {{ formatDia(imp.last_day) }}</template>
+              </span>
+            </q-item-label>
+          </q-item-section>
+          <q-item-section side class="text-right">
+            <q-item-label class="text-weight-bold text-positive">
+              {{ imp.matched_lines }} linha(s)
+            </q-item-label>
+            <q-item-label caption>{{ formatQtd(imp.matched_quantity) }} pç</q-item-label>
+          </q-item-section>
+        </q-item>
+      </q-list>
+
       <q-inner-loading :showing="lendo">
         <q-spinner-dots size="32px" color="primary" />
       </q-inner-loading>
@@ -204,7 +258,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useQuasar } from 'quasar'
 import { merchandisingApi } from '@/api/merchandising'
 
@@ -233,6 +287,13 @@ const relato = ref(null)
 const lendo = ref(false)
 const gravando = ref(false)
 
+// As planilhas desta origem que já entraram — o que responde "essa eu já
+// mandei?" sem precisar anexar de novo para descobrir.
+const importadas = ref([])
+const carregandoImportadas = ref(false)
+// A que acabou de entrar nesta sessão, para destacar na lista.
+const recemImportada = ref(null)
+
 const origemAtual = computed(
   () => ORIGENS.find((o) => o.value === origem.value) || ORIGENS[0]
 )
@@ -242,6 +303,11 @@ const formatQtd = (v) =>
 
 const formatDia = (iso) =>
   iso ? new Date(`${iso}T00:00:00`).toLocaleDateString('pt-BR') : '—'
+
+const formatQuando = (iso) =>
+  iso
+    ? new Date(iso).toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+    : '—'
 
 /** 14 dígitos viram CNPJ; 11, CPF. Qualquer outra coisa sai como veio. */
 function formatDoc(digitos) {
@@ -308,7 +374,23 @@ function aoAnexar(file) {
 function limpar() {
   arquivo.value = null
   relato.value = null
+  carregarImportadas()
 }
+
+/** A lista de baixo é por origem: trocar de aba troca a lista. */
+async function carregarImportadas() {
+  carregandoImportadas.value = true
+  try {
+    importadas.value = await merchandisingApi.listInvoiceImports(origem.value)
+  } catch {
+    importadas.value = []
+    $q.notify({ type: 'negative', message: 'Não foi possível listar as planilhas importadas.' })
+  } finally {
+    carregandoImportadas.value = false
+  }
+}
+
+onMounted(carregarImportadas)
 
 async function conferir() {
   if (!arquivo.value) return
@@ -332,6 +414,9 @@ async function importar() {
       message: `${relato.value.matched_lines} linha(s) importada(s).`,
       position: 'top',
     })
+    // O recibo entra na lista de baixo: é ele que prova que a planilha entrou.
+    await carregarImportadas()
+    recemImportada.value = importadas.value[0]?.id || null
   } catch (error) {
     $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
   } finally {

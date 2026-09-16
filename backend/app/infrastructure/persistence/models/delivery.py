@@ -1,7 +1,9 @@
 import enum
 from uuid import uuid4
 
-from sqlalchemy import Column, Date, ForeignKey, Index, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Column, Date, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint,
+)
 from sqlalchemy import Uuid as UUID
 
 from app.infrastructure.persistence.base import DeclarativeBase, TimestampMixin
@@ -79,6 +81,46 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
         ),
         Index("idx_product_deliveries_lookup", "tenant_id", "customer_id", "product_id"),
         Index("idx_product_deliveries_date", "tenant_id", "issued_on"),
+    )
+
+
+class InvoiceImport(DeclarativeBase, TimestampMixin):
+    """O recibo de uma planilha importada: qual arquivo, quando, por quem e
+    quanto dele entrou.
+
+    As linhas de `product_deliveries` não sabem de que arquivo vieram — e
+    reanexar substitui a linha, apagando o rastro. Sem este registro, quem
+    anexa uma planilha e volta à tela no dia seguinte não tem como responder
+    "essa já entrou?" a não ser anexando de novo e conferindo os números.
+
+    É só recibo: não se apaga nem se edita, e apagar um não desfaz a
+    importação. As entradas continuam gravadas por conta própria.
+    """
+
+    __tablename__ = "invoice_imports"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
+    # Quem anexou. Nulo se o usuário for apagado — o recibo continua valendo.
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # 'venda' ou 'brinde' — a mesma origem das entradas que este recibo cobre.
+    kind = Column(String(10), nullable=False, default=DeliveryKind.VENDA.value)
+    file_name = Column(String(255), nullable=False)
+
+    # O período coberto pela planilha (menor e maior EMISSÃO das linhas úteis).
+    first_day = Column(Date, nullable=True)
+    last_day = Column(Date, nullable=True)
+
+    total_lines = Column(Integer, nullable=False, default=0)
+    # Linhas que casaram com cliente E produto — as que de fato entraram.
+    matched_lines = Column(Integer, nullable=False, default=0)
+    matched_quantity = Column(Numeric(15, 3), nullable=False, default=0)
+
+    __table_args__ = (
+        Index("idx_invoice_imports_list", "tenant_id", "kind", "created_at"),
     )
 
 

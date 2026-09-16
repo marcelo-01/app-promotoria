@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.customer import Customer, CustomerStatus
 from app.infrastructure.persistence.models.customer_product import CustomerProduct
-from app.infrastructure.persistence.models.delivery import ProductDelivery, ProductRemoval
+from app.infrastructure.persistence.models.delivery import (
+    InvoiceImport, ProductDelivery, ProductRemoval,
+)
 from app.infrastructure.persistence.models.product import Product
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.promoter_customer import PromoterCustomer
@@ -314,6 +316,27 @@ class MerchandisingRepository:
         for linha in deliveries:
             session.add(linha)
         await session.commit()
+
+    @staticmethod
+    async def add_invoice_import(session: AsyncSession, receipt: InvoiceImport) -> None:
+        """Guarda o recibo de uma planilha que acabou de entrar."""
+        session.add(receipt)
+        await session.commit()
+
+    @staticmethod
+    async def list_invoice_imports(
+        session: AsyncSession, tenant_id: UUID, kind: str, limit: int = 20,
+    ) -> list[tuple[InvoiceImport, Optional[str]]]:
+        """As últimas planilhas desta origem que entraram, da mais recente
+        para a mais antiga, com o nome de quem anexou."""
+        query = (
+            select(InvoiceImport, func.coalesce(User.full_name, User.email))
+            .outerjoin(User, User.id == InvoiceImport.user_id)
+            .where(InvoiceImport.tenant_id == tenant_id, InvoiceImport.kind == kind)
+            .order_by(InvoiceImport.created_at.desc())
+            .limit(limit)
+        )
+        return [(recibo, nome) for recibo, nome in (await session.execute(query)).all()]
 
     @staticmethod
     async def sum_deliveries_in_cycle(

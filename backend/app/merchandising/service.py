@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.service import CustomersService
 from app.infrastructure.persistence.models.delivery import (
-    DeliveryKind, ProductDelivery, ProductRemoval,
+    DeliveryKind, InvoiceImport, ProductDelivery, ProductRemoval,
 )
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.stock_visit import (
@@ -21,7 +21,8 @@ from app.infrastructure.persistence.models.user import User, UserRole
 from app.merchandising import consolidation, evolution, expiry, invoices, orders
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    CountProductResponse, CountSheetResponse, InvoiceImportResponse,
+    CountProductResponse, CountSheetResponse, InvoiceImportRecordResponse,
+    InvoiceImportResponse,
     ExpiryLotResponse, MovedProductResponse, OrderSuggestionItemResponse,
     OrderSuggestionResponse,
     ProductExpiryInput, ProductExpiryResponse,
@@ -342,12 +343,17 @@ class MerchandisingService:
     async def import_invoices(
         session: AsyncSession, tenant_id: UUID, content: bytes, save: bool,
         kind: str = DeliveryKind.VENDA.value,
+        file_name: str = "", user: Optional[User] = None,
     ) -> InvoiceImportResponse:
         """Lê uma das planilhas do ERP e grava as entradas de mercadoria.
 
         `save=False` é a prévia: lê, casa com o cadastro e relata, sem tocar no
         banco. É o modo em que a tela abre — anexar um arquivo errado não pode
         sujar a base antes de alguém olhar.
+
+        Quando grava, deixa também o recibo (`InvoiceImport`): as linhas não
+        sabem de que arquivo vieram, e é o recibo que permite à tela dizer
+        "esta planilha já entrou" no dia seguinte.
 
         LINHA QUE NÃO CASA NÃO É ERRO, É TAREFA
         ---------------------------------------
@@ -413,8 +419,25 @@ class MerchandisingService:
                 )
             )
 
+        quantidade = Decimal(str(round(sum(float(e.quantity) for e in entradas), 3)))
+
         if save:
             await Repo.replace_deliveries(session, tenant_id, entradas)
+            await Repo.add_invoice_import(
+                session,
+                InvoiceImport(
+                    id=uuid4(),
+                    tenant_id=tenant_id,
+                    user_id=user.id if user else None,
+                    kind=kind,
+                    file_name=(file_name or "planilha.xlsx")[:255],
+                    first_day=lido.first_day,
+                    last_day=lido.last_day,
+                    total_lines=lido.total,
+                    matched_lines=len(entradas),
+                    matched_quantity=quantidade,
+                ),
+            )
 
         desconhecidos = lambda faltas: sorted(  # noqa: E731
             (
@@ -437,12 +460,34 @@ class MerchandisingService:
             first_day=lido.first_day,
             last_day=lido.last_day,
             matched_lines=len(entradas),
-            matched_quantity=Decimal(str(round(sum(float(e.quantity) for e in entradas), 3))),
+            matched_quantity=quantidade,
             saved=save,
             unknown_customers=desconhecidos(sem_cliente),
             unknown_products=desconhecidos(sem_produto),
             by_reason=desconhecidos(motivos),
         )
+
+    @staticmethod
+    async def list_invoice_imports(
+        session: AsyncSession, tenant_id: UUID, kind: str,
+    ) -> list[InvoiceImportRecordResponse]:
+        """As planilhas desta origem que já entraram, da mais recente para a
+        mais antiga."""
+        return [
+            InvoiceImportRecordResponse(
+                id=recibo.id,
+                kind=recibo.kind,
+                file_name=recibo.file_name,
+                imported_at=recibo.created_at,
+                imported_by=nome,
+                first_day=recibo.first_day,
+                last_day=recibo.last_day,
+                total_lines=recibo.total_lines,
+                matched_lines=recibo.matched_lines,
+                matched_quantity=recibo.matched_quantity,
+            )
+            for recibo, nome in await Repo.list_invoice_imports(session, tenant_id, kind)
+        ]
 
     # ── Vencido retirado da loja ──────────────────────────────────────────
 
