@@ -22,7 +22,7 @@
 9. [Backend — migração inicial (Alembic)](#9-backend--migração-inicial-alembic)
 10. [Backend — autenticação](#10-backend--autenticação)
 11. [Backend — módulo merchandising](#11-backend--módulo-merchandising)
-12. [Backend — cadastros e importação de planilhas](#12-backend--cadastros-e-importação-de-planilhas)
+12. [Backend — cadastros de clientes e produtos](#12-backend--cadastros-de-clientes-e-produtos)
 13. [Backend — main.py e seed](#13-backend--mainpy-e-seed)
 14. [Frontend — configuração](#14-frontend--configuração)
 15. [Frontend — API, stores e fila offline](#15-frontend--api-stores-e-fila-offline)
@@ -58,8 +58,10 @@ migrar dados", e não uma reescrita.
 ### O que muda por ser standalone
 
 A mudança central: **o app precisa do cadastro próprio de clientes e produtos**. No ERP,
-esses dados viriam do Firebird via o gateway de integração. Aqui, entram por
-**importação de planilha** feita pelo administrador. É o que destrava o uso imediato.
+esses dados viriam do Firebird via o gateway de integração. Aqui, entram pelo
+**cadastro manual** feito pelo administrador, na tela de Cadastros. Não há importação
+de cadastros por planilha: a planilha do ERP que o app lê é a de faturamento, e ela
+só casa com clientes e produtos que já existem aqui.
 
 ### Stack — idêntica ao ERP
 
@@ -241,8 +243,7 @@ fv-estoque/
 │       │   ├── service.py
 │       │   ├── repository.py
 │       │   ├── schemas.py
-│       │   ├── excel.py             # exportação .xlsx
-│       │   └── imports.py           # importação .xlsx/.csv
+│       │   └── excel.py             # exportação .xlsx
 │       └── scripts/
 │           ├── __init__.py
 │           └── seed.py
@@ -282,8 +283,7 @@ fv-estoque/
             └── admin/
                 ├── AdminVisitasPage.vue
                 ├── AdminVinculosPage.vue
-                ├── AdminCadastrosPage.vue
-                └── AdminImportacaoPage.vue
+                └── AdminCadastrosPage.vue
 ```
 
 ### A regra de ouro da organização
@@ -1578,22 +1578,6 @@ class AssignmentUpdate(BaseModel):
 class CustomerMixUpdate(BaseModel):
     """Define o mix de produtos contados em um cliente, na ordem informada."""
     product_ids: List[UUID]
-
-
-# ─── Importação de planilhas ──────────────────────────────────────────────────
-
-
-class ImportRowError(BaseModel):
-    row: int
-    reason: str
-
-
-class ImportReport(BaseModel):
-    total_rows: int = 0
-    created: int = 0
-    updated: int = 0
-    skipped: int = 0
-    errors: List[ImportRowError] = []
 ```
 
 ### `backend/app/merchandising/repository.py`
@@ -2302,10 +2286,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.dependencies import get_current_user_and_tenant, require_roles
 from app.infrastructure.persistence.session import get_db_session
-from app.merchandising import excel, imports
+from app.merchandising import excel
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    AssignmentUpdate, CountProductResponse, CustomerMixUpdate, ImportReport,
+    AssignmentUpdate, CountProductResponse, CustomerMixUpdate,
     PromoterCustomerResponse, StockVisitCreate, StockVisitListResponse, StockVisitResponse,
 )
 from app.merchandising.service import MerchandisingService
@@ -2473,286 +2457,19 @@ async def set_customer_mix(
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
     await Repo.replace_mix(session, context["tenant_id"], customer_id, payload.product_ids)
-
-
-# ─── Administrador: importação de planilhas ───────────────────────────────────
-
-@router.post("/imports/customers", response_model=ImportReport)
-async def import_customers(
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    return await imports.import_customers(session, context["tenant_id"], await file.read())
-
-
-@router.post("/imports/products", response_model=ImportReport)
-async def import_products(
-    file: UploadFile = File(...),
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    return await imports.import_products(session, context["tenant_id"], await file.read())
-
-
-@router.get("/imports/{entity}/template.xlsx")
-async def download_template(
-    entity: str,
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    if entity not in ("customers", "products"):
-        raise HTTPException(status_code=404, detail="Modelo não encontrado")
-    buf = imports.build_template(entity)
-    return excel.xlsx_response(buf, f"modelo_{entity}.xlsx")
 ```
 
 ---
 
-## 12. Backend — cadastros e importação de planilhas
+## 12. Backend — cadastros de clientes e produtos
 
-Sem ERP, alguém precisa cadastrar clientes e produtos. **Digitação manual mata o
-cronograma** — a empresa certamente já tem essas listas em Excel. Por isso a importação
-por planilha entra na primeira versão, e o CRUD manual fica deliberadamente pobre
-(ele será descartado quando o ERP virar fonte da verdade).
+Sem ERP, alguém precisa cadastrar clientes e produtos — e aqui isso é feito **à mão,
+pelo administrador**, na tela de Cadastros. Não há importação de cadastros por planilha.
 
-### Regra central: upsert por chave natural
-
-A importação faz **upsert pela chave natural** (Âncora 4): `document` para cliente,
-`sku` para produto. Rodar a mesma planilha duas vezes não pode duplicar nada.
-
-Essa é exatamente a mesma propriedade que você vai usar no dia da integração com o ERP,
-quando importar os cadastros oficiais para preencher `external_id`.
-
-### `backend/app/merchandising/imports.py`
-
-```python
-"""Importação de clientes e produtos a partir de planilhas .xlsx."""
-from __future__ import annotations
-
-import re
-from io import BytesIO
-from typing import Any, Optional
-from uuid import uuid4
-
-from openpyxl import Workbook, load_workbook
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.infrastructure.persistence.models.customer import Customer
-from app.infrastructure.persistence.models.product import Product
-from app.merchandising.schemas import ImportReport, ImportRowError
-
-# Colunas esperadas em cada modelo. A primeira de cada tupla é a obrigatória.
-CUSTOMER_COLUMNS = [
-    "documento", "nome", "razao_social", "telefone", "email",
-    "cep", "logradouro", "numero", "complemento", "bairro", "cidade", "uf", "tipo",
-]
-PRODUCT_COLUMNS = [
-    "sku", "nome", "codigo_barras", "descricao", "categoria",
-    "unidade", "preco", "unidades_por_caixa", "validade_dias",
-]
-
-
-def _only_digits(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    digits = re.sub(r"\D", "", str(value))
-    return digits or None
-
-
-def _clean(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _to_decimal(value: Any, default=0):
-    if value is None or str(value).strip() == "":
-        return default
-    try:
-        return float(str(value).replace(",", "."))
-    except ValueError:
-        return default
-
-
-def _read_rows(content: bytes) -> tuple[list[str], list[tuple[int, tuple]]]:
-    """Retorna (cabeçalho normalizado, [(numero_da_linha, valores)])."""
-    wb = load_workbook(BytesIO(content), read_only=True, data_only=True)
-    ws = wb.active
-
-    rows = ws.iter_rows(values_only=True)
-    raw_header = next(rows, None)
-    if not raw_header:
-        return [], []
-
-    header = [
-        re.sub(r"[^a-z0-9]+", "_", str(h or "").strip().lower()).strip("_")
-        for h in raw_header
-    ]
-    data = [(idx, values) for idx, values in enumerate(rows, start=2)]
-    return header, data
-
-
-async def import_customers(
-    session: AsyncSession, tenant_id, content: bytes
-) -> ImportReport:
-    header, rows = _read_rows(content)
-    report = ImportReport(total_rows=len(rows))
-    col = {name: idx for idx, name in enumerate(header)}
-
-    def get(values, name):
-        idx = col.get(name)
-        return values[idx] if idx is not None and idx < len(values) else None
-
-    for line, values in rows:
-        if not any(v is not None and str(v).strip() for v in values):
-            report.skipped += 1
-            continue
-
-        name = _clean(get(values, "nome"))
-        document = _only_digits(get(values, "documento"))
-
-        if not name:
-            report.errors.append(ImportRowError(row=line, reason="Coluna 'nome' vazia"))
-            continue
-        if document and len(document) not in (11, 14):
-            report.errors.append(
-                ImportRowError(row=line, reason=f"CPF/CNPJ inválido: {document}")
-            )
-            continue
-
-        existing = None
-        if document:
-            existing = (
-                await session.execute(
-                    select(Customer).where(
-                        Customer.tenant_id == tenant_id,
-                        Customer.document == document,
-                    )
-                )
-            ).scalars().first()
-
-        address = {
-            "zip_code": _only_digits(get(values, "cep")),
-            "street": _clean(get(values, "logradouro")),
-            "number": _clean(get(values, "numero")),
-            "complement": _clean(get(values, "complemento")),
-            "neighborhood": _clean(get(values, "bairro")),
-            "city": _clean(get(values, "cidade")),
-            "state": (_clean(get(values, "uf")) or "").upper()[:2] or None,
-        }
-
-        if existing:
-            existing.name = name
-            existing.corporate_name = _clean(get(values, "razao_social"))
-            existing.phone = _clean(get(values, "telefone"))
-            existing.email = _clean(get(values, "email"))
-            existing.address = address
-            existing.customer_type = _clean(get(values, "tipo"))
-            session.add(existing)
-            report.updated += 1
-        else:
-            session.add(
-                Customer(
-                    id=uuid4(),
-                    tenant_id=tenant_id,
-                    document=document,
-                    name=name,
-                    corporate_name=_clean(get(values, "razao_social")),
-                    phone=_clean(get(values, "telefone")),
-                    email=_clean(get(values, "email")),
-                    address=address,
-                    customer_type=_clean(get(values, "tipo")),
-                )
-            )
-            report.created += 1
-
-    await session.commit()
-    return report
-
-
-async def import_products(
-    session: AsyncSession, tenant_id, content: bytes
-) -> ImportReport:
-    header, rows = _read_rows(content)
-    report = ImportReport(total_rows=len(rows))
-    col = {name: idx for idx, name in enumerate(header)}
-
-    def get(values, name):
-        idx = col.get(name)
-        return values[idx] if idx is not None and idx < len(values) else None
-
-    for line, values in rows:
-        if not any(v is not None and str(v).strip() for v in values):
-            report.skipped += 1
-            continue
-
-        sku = _clean(get(values, "sku"))
-        name = _clean(get(values, "nome"))
-
-        if not sku or not name:
-            report.errors.append(
-                ImportRowError(row=line, reason="Colunas 'sku' e 'nome' são obrigatórias")
-            )
-            continue
-
-        existing = (
-            await session.execute(
-                select(Product).where(Product.tenant_id == tenant_id, Product.sku == sku)
-            )
-        ).scalars().first()
-
-        fields = dict(
-            name=name,
-            barcode=_only_digits(get(values, "codigo_barras")),
-            description=_clean(get(values, "descricao")),
-            category=_clean(get(values, "categoria")),
-            unit=(_clean(get(values, "unidade")) or "UN").upper()[:10],
-            price=_to_decimal(get(values, "preco")),
-            package_size=_to_decimal(get(values, "unidades_por_caixa"), 1),
-            shelf_life_days=int(_to_decimal(get(values, "validade_dias"))) or None,
-        )
-
-        if existing:
-            for key, value in fields.items():
-                setattr(existing, key, value)
-            session.add(existing)
-            report.updated += 1
-        else:
-            session.add(Product(id=uuid4(), tenant_id=tenant_id, sku=sku, **fields))
-            report.created += 1
-
-    await session.commit()
-    return report
-
-
-def build_template(entity: str) -> BytesIO:
-    """Planilha-modelo com o cabeçalho correto e uma linha de exemplo."""
-    columns = CUSTOMER_COLUMNS if entity == "customers" else PRODUCT_COLUMNS
-    example = (
-        ["12345678000190", "Mercado Central", "Mercado Central LTDA", "34999998888",
-         "contato@mercado.com", "35500000", "Rua das Flores", "120", "", "Centro",
-         "Divinópolis", "MG", "varejo"]
-        if entity == "customers"
-        else ["LAT-001", "Leite Integral UHT 1L", "7891234567890",
-              "Leite longa vida", "laticinios", "UN", "6.00", "12", "120"]
-    )
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Modelo"
-    ws.append(columns)
-    ws.append(example)
-    for idx in range(1, len(columns) + 1):
-        ws.column_dimensions[chr(64 + idx) if idx <= 26 else "A"].width = 22
-    ws.freeze_panes = "A2"
-
-    buf = BytesIO()
-    wb.save(buf)
-    buf.seek(0)
-    return buf
-```
+A chave natural continua valendo (Âncora 4): `document` (CNPJ/CPF) para cliente e
+`sku` (código do item no ERP) para produto. É por esses dois campos que a planilha de
+faturamento encontra o cliente e o produto de cada linha — e é por eles que, no dia da
+integração, os cadastros do ERP serão casados com os daqui para preencher `external_id`.
 
 ### Módulos `customers/` e `products/`
 
@@ -3216,24 +2933,6 @@ export const merchandisingApi = {
       product_ids: productIds,
     })
   },
-
-  async importFile(entity, file) {
-    const form = new FormData()
-    form.append('file', file)
-    const { data } = await apiClient.post(`/merchandising/imports/${entity}`, form, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-      timeout: 120000,
-    })
-    return data
-  },
-
-  async downloadTemplate(entity) {
-    const response = await apiClient.get(
-      `/merchandising/imports/${entity}/template.xlsx`,
-      { responseType: 'blob' }
-    )
-    downloadBlob(response)
-  },
 }
 
 /** Extrai o nome do arquivo do Content-Disposition e dispara o download. */
@@ -3498,11 +3197,6 @@ export const adminRoutes = [
         path: 'cadastros',
         name: 'AdminCadastros',
         component: () => import('@/pages/admin/AdminCadastrosPage.vue'),
-      },
-      {
-        path: 'importacao',
-        name: 'AdminImportacao',
-        component: () => import('@/pages/admin/AdminImportacaoPage.vue'),
       },
     ],
   },
@@ -4359,105 +4053,6 @@ onMounted(async () => {
 </script>
 ```
 
-### `pages/admin/AdminImportacaoPage.vue` — importação de planilhas
-
-```vue
-<template>
-  <q-page class="q-pa-md">
-    <div class="text-h6 q-mb-md">Importar cadastros</div>
-
-    <div class="row q-col-gutter-md">
-      <div v-for="entidade in entidades" :key="entidade.key" class="col-12 col-md-6">
-        <q-card flat bordered>
-          <q-card-section>
-            <div class="text-subtitle1">{{ entidade.label }}</div>
-            <div class="text-caption text-grey-7">{{ entidade.hint }}</div>
-          </q-card-section>
-
-          <q-card-section>
-            <q-btn
-              flat no-caps dense color="primary" icon="description"
-              label="Baixar planilha-modelo"
-              @click="merchandisingApi.downloadTemplate(entidade.key)"
-            />
-          </q-card-section>
-
-          <q-card-section>
-            <q-file
-              v-model="arquivos[entidade.key]" outlined dense
-              label="Selecione o arquivo .xlsx"
-              accept=".xlsx,.csv"
-            >
-              <template #prepend><q-icon name="attach_file" /></template>
-            </q-file>
-          </q-card-section>
-
-          <q-card-actions>
-            <q-btn
-              color="primary" no-caps unelevated label="Importar"
-              :disable="!arquivos[entidade.key]"
-              :loading="carregando[entidade.key]"
-              @click="importar(entidade.key)"
-            />
-          </q-card-actions>
-
-          <q-card-section v-if="relatorios[entidade.key]">
-            <q-banner dense class="bg-grey-2 rounded-borders">
-              {{ relatorios[entidade.key].created }} criados ·
-              {{ relatorios[entidade.key].updated }} atualizados ·
-              {{ relatorios[entidade.key].skipped }} ignorados ·
-              {{ relatorios[entidade.key].errors.length }} erros
-            </q-banner>
-
-            <q-list v-if="relatorios[entidade.key].errors.length" dense class="q-mt-sm">
-              <q-item v-for="e in relatorios[entidade.key].errors" :key="e.row">
-                <q-item-section class="text-negative text-caption">
-                  Linha {{ e.row }}: {{ e.reason }}
-                </q-item-section>
-              </q-item>
-            </q-list>
-          </q-card-section>
-        </q-card>
-      </div>
-    </div>
-  </q-page>
-</template>
-
-<script setup>
-import { reactive, ref } from 'vue'
-import { useQuasar } from 'quasar'
-import { merchandisingApi } from '@/api/merchandising'
-
-const $q = useQuasar()
-
-const entidades = [
-  { key: 'customers', label: 'Clientes',
-    hint: 'Atualiza pelo CNPJ/CPF. Rodar a mesma planilha duas vezes não duplica nada.' },
-  { key: 'products', label: 'Produtos',
-    hint: 'Atualiza pelo SKU. Rodar a mesma planilha duas vezes não duplica nada.' },
-]
-
-const arquivos = reactive({ customers: null, products: null })
-const carregando = reactive({ customers: false, products: false })
-const relatorios = reactive({ customers: null, products: null })
-
-async function importar(entidade) {
-  carregando[entidade] = true
-  try {
-    relatorios[entidade] = await merchandisingApi.importFile(entidade, arquivos[entidade])
-    $q.notify({ type: 'positive', message: 'Importação concluída.' })
-  } catch (error) {
-    $q.notify({
-      type: 'negative',
-      message: error.response?.data?.detail || 'Falha na importação',
-    })
-  } finally {
-    carregando[entidade] = false
-  }
-}
-</script>
-```
-
 ### `pages/admin/AdminCadastrosPage.vue`
 
 Abas com CRUD mínimo de **clientes**, **produtos**, **usuários (promotores)** e o **mix
@@ -4494,9 +4089,6 @@ Prefixo `/merchandising` em tudo que é domínio de coleta (Âncora 6).
 | `GET` | `/merchandising/assignments/{promoter_id}` | admin | IDs de clientes do promotor |
 | `PUT` | `/merchandising/assignments/{promoter_id}` | admin | Substitui o conjunto de clientes |
 | `PUT` | `/merchandising/customers/{id}/mix` | admin | Define o mix de produtos do cliente |
-| `POST` | `/merchandising/imports/customers` | admin | Importa planilha (multipart) |
-| `POST` | `/merchandising/imports/products` | admin | Importa planilha (multipart) |
-| `GET` | `/merchandising/imports/{entity}/template.xlsx` | admin | Baixa planilha-modelo |
 
 ### Fora do prefixo (cadastros temporários + auth)
 
@@ -4537,9 +4129,10 @@ sincronizados do Firebird.
 
 ### Passo 1 — Pré-casamento dos cadastros ⚠️ **faça o quanto antes, não no fim**
 
-Assim que o ERP tiver dados reais, exporte clientes e produtos dele e rode a importação
-no app standalone. Como o upsert é por `document`/`sku`, os registros já existentes serão
-**atualizados**, não duplicados — e você aproveita para preencher `external_id`.
+Assim que o ERP tiver dados reais, exporte clientes e produtos dele para uma tabela
+temporária no banco do app standalone e case pela chave natural — `document` para
+cliente, `sku` para produto — para preencher `external_id`. Cadastro que não casar é
+divergência entre os dois sistemas, e precisa ser resolvida à mão antes da fusão.
 
 ```sql
 -- No banco do app standalone, após importar o extrato do ERP:
@@ -4572,7 +4165,6 @@ Ajustes no código copiado:
   `sellers.user_id`.
 - `MerchandisingRepository` troca `PromoterCustomer` por `SellerCustomer` com
   `link_type='promotor'`, e o join passa por `sellers.user_id == User.id`.
-- `imports.py` pode ser removido — o ERP recebe cadastros do Firebird.
 - `customers/` e `products/` do standalone são **descartados**; o ERP já tem os seus.
 
 ### Passo 3 — Migrações no ERP
@@ -4641,7 +4233,7 @@ em backup por pelo menos um ciclo de fechamento.
 | Fase | Entrega | Critério de pronto |
 |---|---|---|
 | **1** | Esqueleto: docker-compose, fundação copiada, `001_initial`, seed | `make up && make migrate && make seed`; login funciona em `/docs` |
-| **2** | Cadastros mínimos + **importação por planilha** | Admin importa a lista real de clientes e produtos da empresa |
+| **2** | Cadastros mínimos (clientes, produtos, promotores) | Admin cadastra os clientes e produtos reais da empresa pela tela |
 | **3** | Vínculos promotor↔cliente + mix por cliente | Um promotor de teste vê só os clientes dele |
 | **4** | PWA do promotor: clientes → produtos → contagem → enviar | Contagem completa gravada no banco pelo celular |
 | **5** | Export `.xlsx` (por visita + consolidado) | Admin baixa a planilha e ela abre corretamente no Excel |
@@ -4710,7 +4302,7 @@ Defaults adotados neste plano. Se algum estiver errado, ajuste antes da fase 3:
    `customer_products`; sem mix, o catálogo completo.
 2. **Formato da planilha** — os dois: por visita e consolidada por período, mesma função
    de geração, admin escolhe.
-3. **Cliente novo** — cadastrado por importação de planilha ou CRUD do admin. O promotor
+3. **Cliente novo** — cadastrado pelo admin, na tela de Cadastros. O promotor
    **não** cadastra clientes (prospecção fica para o `prospect_customers` do ERP).
 
 ---
