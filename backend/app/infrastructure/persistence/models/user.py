@@ -29,8 +29,24 @@ class User(DeclarativeBase, TimestampMixin):
         default=UserRole.PROMOTER,
         nullable=False,
     )
+    # O segundo papel de campo de quem acumula promotor e vendedor. `role` continua
+    # sendo UM papel — é o que vai no token e o que o ERP conhece (Âncora 5) —, e
+    # decide onde o login cai; este é o outro. Só promoter ↔ seller faz sentido.
+    secondary_role = Column(
+        SQLEnum(UserRole, native_enum=True,
+                values_callable=lambda x: [e.value for e in x]),
+        nullable=True,
+    )
     is_active = Column(Boolean, default=True, nullable=False)
     avatar_url = Column(Text, nullable=True)
+
+    @property
+    def roles(self) -> set[str]:
+        """Os papéis da pessoa, como conjunto — é por aqui que se autoriza."""
+        roles = {self.role.value}
+        if self.secondary_role:
+            roles.add(self.secondary_role.value)
+        return roles
 
     __table_args__ = (
         Index("idx_users_tenant_email", "tenant_id", "email"),

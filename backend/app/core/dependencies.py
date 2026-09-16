@@ -92,7 +92,9 @@ def require_roles(*roles: str):
         context: Dict[str, Any] = Depends(get_current_user_and_tenant),
     ) -> Dict[str, Any]:
         user: User = context["user"]
-        if user.role.value not in roles:
+        # Conjunto, e não `user.role`: quem acumula promotor e vendedor entra
+        # nas rotas dos dois.
+        if not (user.roles & set(roles)):
             allowed = ", ".join(roles)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

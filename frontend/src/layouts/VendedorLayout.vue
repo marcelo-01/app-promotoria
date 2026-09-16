@@ -3,6 +3,9 @@
   parte que não lhe diz respeito — não há fila offline nem sincronização,
   porque o vendedor só lê o que o promotor contou e ajusta o fator de giro
   produto a produto, na própria tela do pedido. Uma tela só; sem abas.
+
+  Quem também é promotor vai para a contagem pelo menu — item, não aba: a
+  contagem é outro app, com fila offline e tudo, não outra tela deste.
 -->
 <template>
   <q-layout view="hHh lpR fFf">
@@ -15,6 +18,13 @@
         <q-btn flat dense round icon="more_vert" aria-label="Menu">
           <q-menu>
             <q-list style="min-width: 180px">
+              <template v-if="userStore.hasRole('promoter')">
+                <q-item clickable v-close-popup :to="{ name: 'PromotorClientes' }">
+                  <q-item-section avatar><q-icon name="inventory_2" /></q-item-section>
+                  <q-item-section>Contagem de estoque</q-item-section>
+                </q-item>
+                <q-separator />
+              </template>
               <q-item clickable v-close-popup @click="dialogSenha = true">
                 <q-item-section avatar><q-icon name="lock_reset" /></q-item-section>
                 <q-item-section>Trocar minha senha</q-item-section>
@@ -42,10 +52,12 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
+import { useUserStore } from '@/stores/user'
 import TrocarSenhaDialog from '@/components/TrocarSenhaDialog.vue'
 
 const router = useRouter()
 const auth = useAuthStore()
+const userStore = useUserStore()
 
 const dialogSenha = ref(false)
 

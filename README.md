@@ -94,8 +94,14 @@ Usuários criados pelo `seed`:
    caixa são o que converte a contagem na planilha (produto vendido só a granel
    fica com 1).
 3. **Cadastros → Promotores** (e **→ Vendedores**) → crie a pessoa com nome, e-mail e senha.
+   Quem conta a loja **e** lança o pedido é uma pessoa só, com um login: marque
+   "Também é vendedor" (ou "Também é promotor") ao criar, ou ligue o interruptor na
+   linha dela depois. Ela cai no app da aba em que foi criada e troca para o
+   outro pelo menu, sem sair.
 4. **Clientes por promotor/vendedor** → marque quais clientes cada um atende e salve.
-   O vendedor vê o pedido sugerido só dos clientes vinculados a ele.
+   O vendedor vê o pedido sugerido só dos clientes vinculados a ele. Quem tem os
+   dois papéis aparece nas duas listas com os mesmos clientes — o vínculo é da
+   pessoa, não do papel.
 5. *(Opcional)* **Cadastros → Mix por cliente** → escolha quais produtos são
    contados em cada cliente. Sem mix, o promotor vê o catálogo completo.
 6. Entre como o promotor (de preferência no celular) e faça as **duas** contagens

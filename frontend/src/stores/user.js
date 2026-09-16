@@ -6,9 +6,17 @@ export const useUserStore = defineStore('user', () => {
   const user = ref(JSON.parse(localStorage.getItem('user') || 'null'))
   const loading = ref(false)
 
+  // Os papéis como conjunto: quem acumula promotor e vendedor tem os dois. O
+  // fallback em `role` cobre a sessão aberta antes de `roles` existir — o
+  // `user` do localStorage só ganha o campo no próximo /auth/me.
+  const roles = computed(() =>
+    user.value?.roles?.length ? user.value.roles : [user.value?.role].filter(Boolean)
+  )
+  const hasRole = (role) => roles.value.includes(role)
+
   const isAdmin = computed(() => user.value?.role === 'admin')
   const isSupervisor = computed(() => user.value?.role === 'supervisor')
-  const isSeller = computed(() => user.value?.role === 'seller')
+  const isSeller = computed(() => hasRole('seller'))
   const isManagerOrAbove = computed(() => isAdmin.value || isSupervisor.value)
 
   const setUser = (userData) => {
@@ -96,6 +104,8 @@ export const useUserStore = defineStore('user', () => {
   return {
     user,
     loading,
+    roles,
+    hasRole,
     isAdmin,
     isSupervisor,
     isSeller,

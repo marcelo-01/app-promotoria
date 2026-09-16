@@ -28,6 +28,14 @@
                 <q-item-section avatar><q-icon name="sync" /></q-item-section>
                 <q-item-section>Sincronizar agora</q-item-section>
               </q-item>
+              <!-- Quem também é vendedor troca de app por aqui, sem sair -->
+              <template v-if="userStore.hasRole('seller')">
+                <q-separator />
+                <q-item clickable v-close-popup :to="{ name: 'VendedorPedidos' }">
+                  <q-item-section avatar><q-icon name="shopping_cart" /></q-item-section>
+                  <q-item-section>Pedido sugerido</q-item-section>
+                </q-item>
+              </template>
               <q-separator />
               <q-item clickable v-close-popup @click="dialogSenha = true">
                 <q-item-section avatar><q-icon name="lock_reset" /></q-item-section>
@@ -81,6 +89,7 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useQuasar } from 'quasar'
 import { useAuthStore } from '@/stores/auth'
+import { useUserStore } from '@/stores/user'
 import { useVisitaStore } from '@/stores/visita'
 import { useOfflineQueue } from '@/composables/useOfflineQueue'
 import TrocarSenhaDialog from '@/components/TrocarSenhaDialog.vue'
@@ -89,6 +98,7 @@ const route = useRoute()
 const router = useRouter()
 const $q = useQuasar()
 const auth = useAuthStore()
+const userStore = useUserStore()
 const visita = useVisitaStore()
 const { online } = useOfflineQueue()
 

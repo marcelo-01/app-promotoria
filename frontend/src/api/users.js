@@ -21,6 +21,11 @@ export const usersApi = {
     return data
   },
 
+  /** O conjunto completo de papéis de campo: ['promoter'], ['seller'] ou os dois. */
+  async setRoles(userId, roles) {
+    await apiClient.put(`/users/${userId}/roles`, { roles })
+  },
+
   /** Redefinição de senha pelo administrador — não há 'esqueci minha senha' no MVP. */
   async setPassword(userId, newPassword) {
     await apiClient.put(`/users/${userId}/password`, { new_password: newPassword })

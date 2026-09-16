@@ -1,9 +1,11 @@
 """Cópia de fv-laticinios/backend/app/auth/schemas.py.
 
-Única divergência: `UserResponse.profile` foi removido, porque o `User` deste app
-não tem a coluna `profile` (ver seção 10 do PLANO_APP_ESTOQUE_PROMOTOR.md).
+Duas divergências em `UserResponse`: `profile` foi removido, porque o `User`
+deste app não tem a coluna (ver seção 10 do PLANO_APP_ESTOQUE_PROMOTOR.md); e
+`roles` foi acrescentado, porque aqui uma pessoa pode acumular promotor e
+vendedor e o frontend precisa saber dos dois.
 """
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, field_validator
 from typing import Optional
 from uuid import UUID
 from datetime import datetime
@@ -45,12 +47,18 @@ class UserResponse(BaseModel):
     full_name: Optional[str]
     phone: Optional[str] = None
     role: str
+    roles: list[str] = []
     is_active: bool
     avatar_url: Optional[str] = None
     created_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
+
+    @field_validator("roles", mode="before")
+    @classmethod
+    def _roles_list(cls, value):
+        return sorted(value)
 
 
 class UpdateProfileRequest(BaseModel):

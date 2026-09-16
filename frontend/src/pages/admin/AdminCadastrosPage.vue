@@ -86,15 +86,27 @@
 
       <!-- ── Promotores e vendedores ────────────────────────────────── -->
       <!-- O mesmo painel para os dois: são o mesmo cadastro (nome, e-mail e
-           senha), só muda o papel — e o papel é o que decide qual app a
-           pessoa vê ao entrar. -->
+           senha), só muda o papel. Uma pessoa pode ter os dois — quem conta a
+           loja e também lança o pedido — e aí aparece nas duas abas. O papel
+           da aba em que foi criada é o principal: é onde ela cai ao entrar;
+           o outro app fica no menu. -->
       <q-tab-panel v-for="papel in PAPEIS" :key="papel.role" :name="papel.aba" class="q-pa-none">
         <div class="row justify-end q-mb-sm">
           <q-btn color="primary" no-caps unelevated icon="add" :label="`Novo ${papel.singular}`"
                  @click="abrirUsuario(papel)" />
         </div>
 
-        <q-table :rows="usuarios[papel.role]" :columns="colunasUsuario" row-key="id" flat bordered>
+        <q-table :rows="usuarios[papel.role]" :columns="colunasUsuario(papel)" row-key="id"
+                 flat bordered>
+          <template #body-cell-outro="props">
+            <q-td :props="props">
+              <q-toggle
+                :model-value="props.row.roles.includes(papel.outro)" color="positive"
+                :label="`também ${papel.outroRotulo}`"
+                @update:model-value="alternarPapel(props.row, papel, $event)"
+              />
+            </q-td>
+          </template>
           <template #body-cell-acoes="props">
             <q-td :props="props" class="text-right">
               <q-btn flat dense round icon="key" color="primary"
@@ -276,6 +288,7 @@
           <q-input v-model="usuarioForm.email" outlined dense label="E-mail *" type="email" />
           <q-input v-model="usuarioForm.password" outlined dense label="Senha *" type="text"
                    :hint="`Mínimo 6 caracteres. O ${papelNovo.singular} usa este e-mail e senha para entrar.`" />
+          <q-checkbox v-model="usuarioForm.outro" :label="`Também é ${papelNovo.outroRotulo}`" />
         </q-card-section>
         <q-card-actions align="right">
           <q-btn flat no-caps label="Cancelar" v-close-popup />
@@ -580,10 +593,13 @@ async function alternarProduto(row, ativo) {
 
 // ── Promotores e vendedores ─────────────────────────────────────────────
 // Os dois papéis de campo. O promotor conta a loja; o vendedor lê o pedido
-// sugerido a partir do que o promotor contou. Mesmo cadastro, papel diferente.
+// sugerido a partir do que o promotor contou. Mesmo cadastro, papel diferente
+// — e `outro` é o papel que a pessoa pode acumular a partir desta aba.
 const PAPEIS = [
-  { role: 'promoter', aba: 'promotores', singular: 'promotor', criado: 'Promotor criado.' },
-  { role: 'seller', aba: 'vendedores', singular: 'vendedor', criado: 'Vendedor criado.' },
+  { role: 'promoter', aba: 'promotores', singular: 'promotor', criado: 'Promotor criado.',
+    outro: 'seller', outroRotulo: 'vendedor' },
+  { role: 'seller', aba: 'vendedores', singular: 'vendedor', criado: 'Vendedor criado.',
+    outro: 'promoter', outroRotulo: 'promotor' },
 ]
 
 const usuarios = reactive({ promoter: [], seller: [] })
@@ -593,13 +609,16 @@ const dialogSenha = ref(false)
 const senhaAlvo = ref(null)
 const novaSenha = ref('')
 
-const usuarioForm = reactive({ full_name: '', email: '', password: '' })
+const usuarioForm = reactive({ full_name: '', email: '', password: '', outro: false })
 
-const colunasUsuario = [
+const colunasUsuario = (papel) => [
   { name: 'full_name', label: 'Nome', field: 'full_name', align: 'left' },
   { name: 'email', label: 'E-mail', field: 'email', align: 'left' },
+  { name: 'outro', label: capitalizar(papel.outroRotulo), field: 'roles', align: 'left' },
   { name: 'acoes', label: '', field: 'acoes', align: 'right' },
 ]
+
+const capitalizar = (texto) => texto.charAt(0).toUpperCase() + texto.slice(1)
 
 async function carregarUsuarios(role) {
   usuarios[role] = await usersApi.list({ role })
@@ -607,7 +626,7 @@ async function carregarUsuarios(role) {
 
 function abrirUsuario(papel) {
   papelNovo.value = papel
-  Object.assign(usuarioForm, { full_name: '', email: '', password: '' })
+  Object.assign(usuarioForm, { full_name: '', email: '', password: '', outro: false })
   dialogUsuario.value = true
 }
 
@@ -617,16 +636,34 @@ async function salvarUsuario() {
     return
   }
   const papel = papelNovo.value
+  const { outro, ...dados } = usuarioForm
   salvando.value = true
   try {
-    await usersApi.create({ ...usuarioForm, role: papel.role })
+    await usersApi.create({
+      ...dados, role: papel.role, secondary_role: outro ? papel.outro : null,
+    })
     dialogUsuario.value = false
-    await carregarUsuarios(papel.role)
+    // Com o outro papel marcado, a pessoa entra também na outra aba
+    await Promise.all(PAPEIS.map((p) => carregarUsuarios(p.role)))
     $q.notify({ type: 'positive', message: papel.criado })
   } catch (error) {
     notifyError(error, `Erro ao criar ${papel.singular}`)
   } finally {
     salvando.value = false
+  }
+}
+
+/** Liga ou desliga o outro papel da pessoa. Recarrega as duas abas: ela
+ *  aparece ou some da outra. */
+async function alternarPapel(row, papel, ligado) {
+  const roles = ligado
+    ? [...row.roles, papel.outro]
+    : row.roles.filter((r) => r !== papel.outro)
+  try {
+    await usersApi.setRoles(row.id, roles)
+    await Promise.all(PAPEIS.map((p) => carregarUsuarios(p.role)))
+  } catch (error) {
+    notifyError(error, 'Erro ao alterar o papel')
   }
 }
 

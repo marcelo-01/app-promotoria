@@ -128,6 +128,12 @@ function roleOf() {
   return JSON.parse(localStorage.getItem('user') || 'null')?.role
 }
 
+/** Todos os papéis da pessoa; sessão antiga (sem `roles`) cai no `role` só. */
+function rolesOf() {
+  const user = JSON.parse(localStorage.getItem('user') || 'null')
+  return user?.roles?.length ? user.roles : [user?.role].filter(Boolean)
+}
+
 /** A tela inicial de cada papel — a mesma conta no login, na raiz e no guard. */
 export function homeFor(role) {
   if (role === 'promoter') return '/promotor'
@@ -148,10 +154,13 @@ router.beforeEach((to, from, next) => {
   const requiresAuth = to.matched.some((r) => r.meta.requiresAuth !== false)
   const requiredRoles = to.matched.flatMap((r) => r.meta.requiresRoles || [])
   const role = userStore.user?.role || roleOf()
+  // Basta um dos papéis da pessoa servir: quem acumula promotor e vendedor
+  // entra nos dois apps. O redirecionamento continua pelo principal.
+  const roles = userStore.user ? userStore.roles : rolesOf()
 
   if (requiresAuth && !authStore.isAuthenticated) {
     next('/login')
-  } else if (requiredRoles.length > 0 && !requiredRoles.includes(role)) {
+  } else if (requiredRoles.length > 0 && !requiredRoles.some((r) => roles.includes(r))) {
     next(homeFor(role))
   } else if (to.path === '/login' && authStore.isAuthenticated) {
     next('/')

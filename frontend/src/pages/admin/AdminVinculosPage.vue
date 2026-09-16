@@ -3,6 +3,10 @@
   vínculo — a mesma tabela, os mesmos endpoints — e por isso a tela é uma só,
   com um seletor de papel em cima da lista. O promotor conta a loja; o
   vendedor recebe o pedido sugerido a partir do que o promotor contou.
+
+  Quem acumula os dois papéis aparece nas duas listas, com os mesmos clientes:
+  o vínculo é da pessoa, não do papel — ela conta e vê o pedido das mesmas
+  lojas, e salvar de um lado vale para o outro.
 -->
 <template>
   <q-page class="q-pa-md row q-col-gutter-md">
@@ -25,7 +29,10 @@
           >
             <q-item-section>
               <q-item-label>{{ p.full_name }}</q-item-label>
-              <q-item-label caption>{{ p.email }}</q-item-label>
+              <q-item-label caption>
+                {{ p.email }}
+                <span v-if="acumula(p)"> · também {{ PAPEIS[outroPapel].singular }}</span>
+              </q-item-label>
             </q-item-section>
           </q-item>
 
@@ -97,6 +104,8 @@ const busca = ref('')
 const salvando = ref(false)
 
 const papel = computed(() => PAPEIS[papelAtual.value])
+const outroPapel = computed(() => (papelAtual.value === 'promoter' ? 'seller' : 'promoter'))
+const acumula = (pessoa) => (pessoa.roles || []).includes(outroPapel.value)
 
 const filtrados = computed(() => {
   const term = busca.value?.trim().toLowerCase()
