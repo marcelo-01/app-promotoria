@@ -24,7 +24,7 @@ from app.merchandising.schemas import (
 
 # A planilha do ERP é grande, mas não é ilimitada: um arquivo muito maior que
 # isto é engano de anexo, e ler 200 MB de Excel derruba o contêiner.
-_MAX_PLANILHA = 25 * 1024 * 1024
+_MAX_PLANILHA = 40 * 1024 * 1024
 from app.merchandising.service import MerchandisingService
 
 router = APIRouter(prefix="/merchandising", tags=["merchandising"])
@@ -467,7 +467,7 @@ async def _ler_planilha(file: UploadFile) -> bytes:
     if len(conteudo) > _MAX_PLANILHA:
         raise HTTPException(
             status_code=413,
-            detail="Planilha grande demais (limite de 25 MB).",
+            detail="Planilha grande demais (limite de 40 MB). Exporte um período menor.",
         )
     if not conteudo:
         raise HTTPException(status_code=422, detail="O arquivo chegou vazio.")

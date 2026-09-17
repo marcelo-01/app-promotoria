@@ -115,8 +115,11 @@
         </q-item>
       </q-list>
 
-      <q-inner-loading :showing="lendo">
+      <!-- Uma planilha de 25 MB leva minutos numa conexão fraca: sem o
+           progresso, a tela parece travada e alguém fecha no meio. -->
+      <q-inner-loading :showing="lendo || gravando">
         <q-spinner-dots size="32px" color="primary" />
+        <div class="text-caption text-grey-8 q-mt-sm">{{ etapa }}</div>
       </q-inner-loading>
     </q-card>
 
@@ -309,6 +312,8 @@ const arquivo = ref(null)
 const relato = ref(null)
 const lendo = ref(false)
 const gravando = ref(false)
+// Quanto do arquivo já subiu — `null` fora do envio.
+const progresso = ref(null)
 
 // As planilhas desta origem que já entraram — o que responde "essa eu já
 // mandei?" sem precisar anexar de novo para descobrir.
@@ -320,6 +325,20 @@ const recemImportada = ref(null)
 const origemAtual = computed(
   () => ORIGENS.find((o) => o.value === origem.value) || ORIGENS[0]
 )
+
+const formatMb = (bytes) =>
+  (bytes / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
+
+/** O que dizer enquanto se espera: subindo o arquivo, ou o servidor lendo. */
+const etapa = computed(() => {
+  const p = progresso.value
+  if (p && p.loaded < p.total) {
+    return `Enviando… ${formatMb(p.loaded)} de ${formatMb(p.total)} MB`
+  }
+  return gravando.value ? 'Gravando as entradas…' : 'Lendo a planilha…'
+})
+
+const aoProgredir = (p) => { progresso.value = p }
 
 const formatQtd = (v) =>
   Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
@@ -431,20 +450,27 @@ onMounted(carregarImportadas)
 async function conferir() {
   if (!arquivo.value) return
   lendo.value = true
+  progresso.value = null
   try {
-    relato.value = await merchandisingApi.previewInvoices(arquivo.value, origem.value)
+    relato.value = await merchandisingApi.previewInvoices(
+      arquivo.value, origem.value, aoProgredir
+    )
   } catch (error) {
     relato.value = null
-    $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
+    $q.notify({ type: 'negative', message: error.message, timeout: 8000 })
   } finally {
     lendo.value = false
+    progresso.value = null
   }
 }
 
 async function importar() {
   gravando.value = true
+  progresso.value = null
   try {
-    relato.value = await merchandisingApi.importInvoices(arquivo.value, origem.value)
+    relato.value = await merchandisingApi.importInvoices(
+      arquivo.value, origem.value, aoProgredir
+    )
     $q.notify({
       type: 'positive',
       message: `${relato.value.matched_lines} linha(s) importada(s).`,
@@ -454,9 +480,10 @@ async function importar() {
     await carregarImportadas()
     recemImportada.value = importadas.value[0]?.id || null
   } catch (error) {
-    $q.notify({ type: 'negative', message: error.message, timeout: 6000 })
+    $q.notify({ type: 'negative', message: error.message, timeout: 8000 })
   } finally {
     gravando.value = false
+    progresso.value = null
   }
 }
 </script>

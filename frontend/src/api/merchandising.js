@@ -110,12 +110,12 @@ export const merchandisingApi = {
    * Timeout largo: são milhares de linhas por arquivo, e o servidor ainda casa
    * cada uma com o cadastro antes de responder.
    */
-  async previewInvoices(file, kind = 'venda') {
-    return enviarPlanilha(`/merchandising/invoices/preview?kind=${kind}`, file)
+  async previewInvoices(file, kind = 'venda', onProgress) {
+    return enviarPlanilha(`/merchandising/invoices/preview?kind=${kind}`, file, onProgress)
   },
 
-  async importInvoices(file, kind = 'venda') {
-    return enviarPlanilha(`/merchandising/invoices/import?kind=${kind}`, file)
+  async importInvoices(file, kind = 'venda', onProgress) {
+    return enviarPlanilha(`/merchandising/invoices/import?kind=${kind}`, file, onProgress)
   },
 
   /** As planilhas desta origem que já entraram, da mais recente para a mais
@@ -199,12 +199,24 @@ export const merchandisingApi = {
   },
 }
 
-/** POST multipart da planilha, com o `detail` do servidor já legível. */
-async function enviarPlanilha(url, file) {
+/**
+ * POST multipart da planilha, com o `detail` do servidor já legível.
+ *
+ * O timeout é de 10 minutos porque cobre o envio inteiro: dois meses de
+ * faturamento são 25 MB, e numa conexão de 2 Mbps de subida só o upload passa
+ * de 100 segundos. `onProgress` recebe `{ loaded, total }` durante o envio,
+ * para a tela mostrar que a coisa anda.
+ */
+async function enviarPlanilha(url, file, onProgress) {
   const form = new FormData()
   form.append('file', file)
   try {
-    const { data } = await apiClient.post(url, form, { timeout: 120000 })
+    const { data } = await apiClient.post(url, form, {
+      timeout: 600000,
+      onUploadProgress: onProgress
+        ? (e) => onProgress({ loaded: e.loaded, total: e.total || file.size })
+        : undefined,
+    })
     return data
   } catch (error) {
     // O erro cru fica no console: é o que dá para copiar e mandar quando a
@@ -226,8 +238,8 @@ function motivoDaPlanilha(error) {
   if (typeof detail === 'string' && detail) return detail
 
   if (error.code === 'ECONNABORTED') {
-    return 'O servidor não respondeu em 2 minutos. A planilha pode ser grande '
-      + 'demais para a conexão — tente de novo, ou envie um período menor.'
+    return 'O envio não terminou em 10 minutos. A conexão pode estar lenta '
+      + 'demais para esta planilha — tente de novo, ou exporte um período menor.'
   }
   if (!error.response) {
     return 'A planilha não chegou ao servidor (a conexão caiu no meio do envio). '

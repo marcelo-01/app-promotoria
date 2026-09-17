@@ -5,7 +5,8 @@ from decimal import Decimal
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select, tuple_, update
+from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.customer import Customer, CustomerStatus
@@ -289,6 +290,10 @@ class MerchandisingRepository:
             if documento and documento.strip()
         }
 
+    # Linhas por INSERT. Cada uma leva 13 parâmetros, e o protocolo do Postgres
+    # aceita 32 767 por comando — 2 000 linhas ficam em 26 mil, com folga.
+    _LOTE_ENTREGAS = 2000
+
     @staticmethod
     async def replace_deliveries(
         session: AsyncSession, tenant_id: UUID, deliveries: list[ProductDelivery]
@@ -296,25 +301,49 @@ class MerchandisingRepository:
         """Grava as entradas, substituindo as que já tinham a mesma chave.
 
         Anexar a planilha de ontem de novo não duplica nada: a chave é
-        (empresa, nº venda, produto), e uma linha corrigida no ERP sobrescreve a
-        que estava aqui.
+        (origem, empresa, nº venda, produto), e uma linha corrigida no ERP
+        sobrescreve a que estava aqui.
+
+        É um upsert em lotes, e não DELETE + INSERT de tudo, por tamanho: dois
+        meses de faturamento são 60 mil linhas, e um único `DELETE ... IN` com
+        60 mil chaves estoura o Postgres ("stack depth limit exceeded") antes
+        de apagar qualquer coisa. O `ON CONFLICT` faz a troca linha a linha,
+        dentro do limite de parâmetros por comando, e numa transação só.
         """
         if not deliveries:
             return
 
-        chaves = {(d.company, d.sale_number, d.product_id) for d in deliveries}
-        await session.execute(
-            delete(ProductDelivery).where(
-                ProductDelivery.tenant_id == tenant_id,
-                tuple_(
-                    ProductDelivery.company,
-                    ProductDelivery.sale_number,
-                    ProductDelivery.product_id,
-                ).in_(list(chaves)),
+        tabela = ProductDelivery.__table__
+        for inicio in range(0, len(deliveries), MerchandisingRepository._LOTE_ENTREGAS):
+            lote = deliveries[inicio:inicio + MerchandisingRepository._LOTE_ENTREGAS]
+            comando = pg_insert(tabela).values([
+                {
+                    "id": d.id,
+                    "tenant_id": tenant_id,
+                    "kind": d.kind,
+                    "customer_id": d.customer_id,
+                    "product_id": d.product_id,
+                    "issued_on": d.issued_on,
+                    "quantity": d.quantity,
+                    "company": d.company,
+                    "sale_number": d.sale_number,
+                    "invoice": d.invoice,
+                    "cfop": d.cfop,
+                }
+                for d in lote
+            ])
+            comando = comando.on_conflict_do_update(
+                constraint="uq_product_deliveries_venda",
+                set_={
+                    "customer_id": comando.excluded.customer_id,
+                    "issued_on": comando.excluded.issued_on,
+                    "quantity": comando.excluded.quantity,
+                    "invoice": comando.excluded.invoice,
+                    "cfop": comando.excluded.cfop,
+                    "updated_at": func.now(),
+                },
             )
-        )
-        for linha in deliveries:
-            session.add(linha)
+            await session.execute(comando)
         await session.commit()
 
     @staticmethod

@@ -128,7 +128,17 @@ class UnreadableWorkbook(ValueError):
 
 
 def _texto(valor) -> str:
-    return "" if valor is None else str(valor).strip()
+    """Célula → texto limpo. Célula vazia é '' (o leitor devolve '' e não None).
+
+    Número inteiro guardado como float vira '5102', não '5102.0': CFOP, código
+    do item e nº da venda são comparados como texto, e uma exportação que os
+    grave como número não pode mudar a chave da linha.
+    """
+    if valor is None:
+        return ""
+    if isinstance(valor, float) and valor.is_integer():
+        return str(int(valor))
+    return str(valor).strip()
 
 
 def _chave(nome) -> str:
@@ -242,6 +252,14 @@ def _pecas(valor, kind: str) -> Optional[float]:
     return numero
 
 
+def _celula(linha, i: Optional[int]):
+    """A célula `i` da linha — ou None quando a coluna não existe ou a linha
+    veio mais curta que o cabeçalho (o leitor não completa linha nenhuma)."""
+    if i is None or i >= len(linha):
+        return None
+    return linha[i]
+
+
 def parse(content: bytes, kind: str = "venda") -> Parsed:
     """Arquivo .xlsx → linhas de entrada de mercadoria aproveitáveis.
 
@@ -251,22 +269,28 @@ def parse(content: bytes, kind: str = "venda") -> Parsed:
     Lê a primeira aba. Cabeçalho que não for encontrado é reportado em
     `missing_columns` em vez de estourar: uma exportação com uma coluna a menos
     tem de dizer QUAL falta, não morrer com erro de índice.
+
+    O leitor é o calamine, e não o openpyxl, por tamanho: dois meses de
+    faturamento são 25 MB e 60 mil linhas, que o openpyxl leva mais de meio
+    minuto para percorrer (o dobro na VPS de 1 vCPU) — e a planilha passa por
+    aqui duas vezes, na prévia e na importação. O calamine faz o mesmo em três
+    segundos. O preço é memória: ele carrega a aba inteira (uns 400 MB para
+    esse arquivo), e é isso que dita o teto de tamanho aceito na rota.
     """
-    import openpyxl
+    from python_calamine import CalamineWorkbook
 
     colunas = COLUNAS[kind]
     try:
-        wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
-    except Exception as erro:  # BadZipFile, InvalidFileException, KeyError…
+        wb = CalamineWorkbook.from_filelike(BytesIO(content))
+    except Exception as erro:  # zip corrompido, HTML com nome de .xlsx…
         raise UnreadableWorkbook(
             "Este arquivo não abre como planilha .xlsx. Se o ERP exportou em "
             ".xls, abra no Excel e salve como \"Pasta de Trabalho do Excel "
             "(.xlsx)\" antes de anexar."
         ) from erro
-    if not wb.sheetnames:
+    if not wb.sheet_names:
         return Parsed(missing_columns=sorted(colunas.values()))
-    ws = wb[wb.sheetnames[0]]
-    linhas = ws.iter_rows(values_only=True)
+    linhas = wb.get_sheet_by_name(wb.sheet_names[0]).iter_rows()
 
     try:
         cabecalho = next(linhas)
@@ -296,8 +320,8 @@ def parse(content: bytes, kind: str = "venda") -> Parsed:
 
     saida = Parsed()
     for linha in linhas:
-        pega = lambda campo: linha[indices[campo]] if campo in indices else None  # noqa: E731
-        if not any(v is not None for v in linha):
+        pega = lambda campo: _celula(linha, indices.get(campo))  # noqa: E731
+        if not any(v not in (None, "") for v in linha):
             continue
         saida.total += 1
 

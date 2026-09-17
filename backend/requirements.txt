@@ -13,6 +13,10 @@ python-multipart>=0.0.6
 python-dotenv>=1.0.0
 # Escrita das planilhas .xlsx entregues ao administrador
 openpyxl>=3.1.0
+# Leitura das planilhas do ERP. Dois meses de faturamento são 25 MB e 60 mil
+# linhas: o openpyxl leva mais de meio minuto nisso, o calamine (Rust) três
+# segundos — e a planilha é lida duas vezes, na prévia e na importação.
+python-calamine>=0.3.0
 # Redimensiona a foto do produto no upload — foto de celular tem 4 MB e o
 # promotor carrega o catálogo inteiro na rede do supermercado
 Pillow>=10.0.0

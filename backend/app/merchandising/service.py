@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -362,8 +363,11 @@ class MerchandisingService:
         anexa de novo — a importação é idempotente pela chave da venda, então
         reanexar o mesmo arquivo não duplica o que já entrou.
         """
+        # Fora do event loop: são segundos de CPU num arquivo grande, e com um
+        # processo só a API inteira (a contagem do promotor, o login) ficaria
+        # parada esperando a leitura acabar.
         try:
-            lido = invoices.parse(content, kind)
+            lido = await asyncio.to_thread(invoices.parse, content, kind)
         except invoices.UnreadableWorkbook as erro:
             raise HTTPException(status_code=422, detail=str(erro))
         if lido.missing_columns:
@@ -374,7 +378,11 @@ class MerchandisingService:
         produtos = await Repo.products_by_sku(session, tenant_id)
         clientes = await Repo.customers_by_document(session, tenant_id)
 
-        entradas: list[ProductDelivery] = []
+        # Chave natural → entrada. A mesma venda pode trazer o mesmo item em
+        # duas linhas (dois lotes, por exemplo): elas somam numa entrada só,
+        # porque a chave é única no banco e o que importa é quanto chegou.
+        entradas: dict[tuple, ProductDelivery] = {}
+        casadas = 0
         # código → (nome, linhas, quantidade) do que ficou de fora
         sem_produto: dict[str, list] = {}
         sem_cliente: dict[str, list] = {}
@@ -406,26 +414,32 @@ class MerchandisingService:
                 conta[1] += 1
                 conta[2] += linha.quantity
 
-            entradas.append(
-                ProductDelivery(
-                    id=uuid4(),
-                    tenant_id=tenant_id,
-                    kind=kind,
-                    customer_id=customer_id,
-                    product_id=product_id,
-                    issued_on=linha.issued_on,
-                    quantity=Decimal(str(linha.quantity)),
-                    company=linha.company,
-                    sale_number=linha.sale_number,
-                    invoice=linha.invoice,
-                    cfop=linha.cfop,
-                )
+            casadas += 1
+            chave = (linha.company, linha.sale_number, product_id)
+            repetida = entradas.get(chave)
+            if repetida is not None:
+                repetida.quantity += Decimal(str(linha.quantity))
+                continue
+            entradas[chave] = ProductDelivery(
+                id=uuid4(),
+                tenant_id=tenant_id,
+                kind=kind,
+                customer_id=customer_id,
+                product_id=product_id,
+                issued_on=linha.issued_on,
+                quantity=Decimal(str(linha.quantity)),
+                company=linha.company,
+                sale_number=linha.sale_number,
+                invoice=linha.invoice,
+                cfop=linha.cfop,
             )
 
-        quantidade = Decimal(str(round(sum(float(e.quantity) for e in entradas), 3)))
+        quantidade = Decimal(
+            str(round(sum(float(e.quantity) for e in entradas.values()), 3))
+        )
 
         if save:
-            await Repo.replace_deliveries(session, tenant_id, entradas)
+            await Repo.replace_deliveries(session, tenant_id, list(entradas.values()))
             await Repo.add_invoice_import(
                 session,
                 InvoiceImport(
@@ -437,7 +451,7 @@ class MerchandisingService:
                     first_day=lido.first_day,
                     last_day=lido.last_day,
                     total_lines=lido.total,
-                    matched_lines=len(entradas),
+                    matched_lines=casadas,
                     matched_quantity=quantidade,
                 ),
             )
@@ -462,7 +476,7 @@ class MerchandisingService:
             ignored_weight=lido.ignored_weight,
             first_day=lido.first_day,
             last_day=lido.last_day,
-            matched_lines=len(entradas),
+            matched_lines=casadas,
             matched_quantity=quantidade,
             saved=save,
             unknown_customers=desconhecidos(sem_cliente),
