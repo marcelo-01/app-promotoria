@@ -46,6 +46,7 @@
             accept=".xlsx,.xlsm" :label="`${origemAtual.label} (.xlsx)`"
             :disable="lendo || gravando"
             @update:model-value="aoAnexar"
+            @rejected="aoRecusar"
           >
             <template #prepend><q-icon name="attach_file" /></template>
           </q-file>
@@ -167,6 +168,27 @@
             </span>
             · {{ relato.ignored_cfop }} linha(s) ficaram de fora pelo CFOP.
           </div>
+
+          <!-- Sem nenhuma linha casada o botão de importar fica cinza — e um
+               botão cinza sem explicação parece defeito. O motivo tem de estar
+               aqui, ao lado dele, e não no fim da página. -->
+          <q-banner
+            v-if="!relato.saved && !relato.matched_lines && relato.usable_lines"
+            class="bg-orange-1 rounded-borders q-mt-md"
+          >
+            <template #avatar><q-icon name="link_off" color="orange-9" /></template>
+            <div class="text-weight-bold">
+              Nenhuma linha casou com o cadastro — por isso não há o que importar.
+            </div>
+            A planilha identifica o produto pelo <b>código do ERP</b> e o cliente
+            pelo <b>CNPJ</b>, e o sistema só aproveita a linha quando encontra os
+            dois no cadastro. Preencha o código no produto e o CNPJ no cliente
+            (as listas abaixo dizem quais faltam, a começar pelos que mais
+            pesam) e anexe a planilha de novo.
+            <template #action>
+              <q-btn flat no-caps label="Ir para Cadastros" :to="{ name: 'AdminCadastros' }" />
+            </template>
+          </q-banner>
         </q-card-section>
 
         <q-card-actions v-if="!relato.saved" align="right" class="q-pa-md q-pt-none">
@@ -243,7 +265,8 @@
         </div>
       </div>
 
-      <q-banner v-if="temPendencia" class="bg-blue-1 rounded-borders q-mt-md">
+      <!-- Quando nada casou, o aviso já está em cima, ao lado do botão. -->
+      <q-banner v-if="temPendencia && relato.matched_lines" class="bg-blue-1 rounded-borders q-mt-md">
         <template #avatar><q-icon name="lightbulb" color="primary" /></template>
         Para trazer esses itens, preencha o <b>código do ERP</b> no cadastro do
         produto e o <b>CNPJ</b> no cadastro do cliente, e anexe a planilha de
@@ -369,6 +392,19 @@ const temPendencia = computed(() =>
 function aoAnexar(file) {
   relato.value = null
   if (file) conferir()
+}
+
+/** O campo só aceita .xlsx e, sem isto, recusa qualquer outro arquivo em
+ *  silêncio: o administrador escolhe o .xls que o ERP exportou, nada acontece,
+ *  e parece que a tela travou. */
+function aoRecusar(recusados) {
+  const nome = recusados?.[0]?.file?.name || 'Esse arquivo'
+  $q.notify({
+    type: 'warning',
+    timeout: 8000,
+    message: `${nome} não é .xlsx. Se o ERP exportou em .xls, abra no Excel e `
+      + 'salve como "Pasta de Trabalho do Excel (.xlsx)" antes de anexar.',
+  })
 }
 
 function limpar() {

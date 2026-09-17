@@ -117,6 +117,16 @@ CFOP_VENDA = ("5", "6")
 CFOP_BRINDE = ("5910", "6910")
 
 
+class UnreadableWorkbook(ValueError):
+    """O arquivo tem extensão .xlsx, mas não é um .xlsx que se consiga abrir.
+
+    O caso típico é o ERP exportar em .xls (ou uma tabela HTML com esse nome) e
+    alguém só trocar a extensão. Sem este erro isso estourava como 500 genérico,
+    e "Erro interno do servidor" não diz a ninguém que a saída é salvar de novo
+    pelo Excel.
+    """
+
+
 def _texto(valor) -> str:
     return "" if valor is None else str(valor).strip()
 
@@ -245,7 +255,16 @@ def parse(content: bytes, kind: str = "venda") -> Parsed:
     import openpyxl
 
     colunas = COLUNAS[kind]
-    wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+    try:
+        wb = openpyxl.load_workbook(BytesIO(content), read_only=True, data_only=True)
+    except Exception as erro:  # BadZipFile, InvalidFileException, KeyError…
+        raise UnreadableWorkbook(
+            "Este arquivo não abre como planilha .xlsx. Se o ERP exportou em "
+            ".xls, abra no Excel e salve como \"Pasta de Trabalho do Excel "
+            "(.xlsx)\" antes de anexar."
+        ) from erro
+    if not wb.sheetnames:
+        return Parsed(missing_columns=sorted(colunas.values()))
     ws = wb[wb.sheetnames[0]]
     linhas = ws.iter_rows(values_only=True)
 

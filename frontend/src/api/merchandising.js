@@ -207,10 +207,38 @@ async function enviarPlanilha(url, file) {
     const { data } = await apiClient.post(url, form, { timeout: 120000 })
     return data
   } catch (error) {
-    throw new Error(
-      error.response?.data?.detail || 'Não foi possível ler a planilha.'
-    )
+    // O erro cru fica no console: é o que dá para copiar e mandar quando a
+    // mensagem de tela não bastar para descobrir o que houve.
+    console.error('[planilha]', url, error)
+    throw new Error(motivoDaPlanilha(error))
   }
+}
+
+/**
+ * O que dizer quando a planilha não passou.
+ *
+ * "Não foi possível ler a planilha" servia para tudo — proxy que barrou o
+ * tamanho, rede que caiu, servidor que demorou — e por isso não servia para
+ * nada: quem lia não tinha como saber se era o arquivo ou o caminho até ele.
+ */
+function motivoDaPlanilha(error) {
+  const detail = error.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+
+  if (error.code === 'ECONNABORTED') {
+    return 'O servidor não respondeu em 2 minutos. A planilha pode ser grande '
+      + 'demais para a conexão — tente de novo, ou envie um período menor.'
+  }
+  if (!error.response) {
+    return 'A planilha não chegou ao servidor (a conexão caiu no meio do envio). '
+      + 'Confira a rede e tente de novo.'
+  }
+  const status = error.response.status
+  if (status === 413) {
+    return 'O arquivo é grande demais para o servidor aceitar. '
+      + 'Exporte um período menor.'
+  }
+  return `Não foi possível ler a planilha (o servidor respondeu ${status}).`
 }
 
 /**

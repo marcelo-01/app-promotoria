@@ -362,7 +362,10 @@ class MerchandisingService:
         anexa de novo — a importação é idempotente pela chave da venda, então
         reanexar o mesmo arquivo não duplica o que já entrou.
         """
-        lido = invoices.parse(content, kind)
+        try:
+            lido = invoices.parse(content, kind)
+        except invoices.UnreadableWorkbook as erro:
+            raise HTTPException(status_code=422, detail=str(erro))
         if lido.missing_columns:
             return InvoiceImportResponse(
                 kind=kind, missing_columns=lido.missing_columns
