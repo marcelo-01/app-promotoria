@@ -11,7 +11,7 @@ from app.core.dependencies import require_roles
 from app.infrastructure.persistence.models.delivery import DeliveryKind
 from app.infrastructure.persistence.models.stock_visit import VisitType
 from app.infrastructure.persistence.session import get_db_session
-from app.merchandising import excel
+from app.merchandising import excel, pdf
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
     AssignmentUpdate, CountSheetResponse, CustomerMixUpdate,
@@ -373,6 +373,56 @@ async def get_order_suggestion(
     return await MerchandisingService.order_suggestion(
         session, context["tenant_id"], context["user"], customer_id
     )
+
+
+@router.get("/customers/{customer_id}/order-suggestion.pdf")
+async def export_order_suggestion(
+    customer_id: UUID,
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_SELLER)),
+):
+    """A folha do pedido em PDF, para o vendedor entregar ao comprador da loja.
+
+    Só os produtos com sugestão maior que zero: é o pedido, não a lista de
+    conferência (ver `pdf.py`).
+
+    Quando não há pedido, recusa com 409 e o motivo — o mesmo texto que a tela
+    já mostra no banner, para o vendedor não ler duas explicações diferentes do
+    mesmo fato. Na prática é rede de segurança: o botão nem aparece nesses
+    estados.
+    """
+    sugestao, cliente = await MerchandisingService.order_suggestion_for_pdf(
+        session, context["tenant_id"], context["user"], customer_id
+    )
+
+    if sugestao.stale:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"A última coleta foi em {sugestao.last_collection_day:%d/%m/%Y}, "
+                "semana passada. O pedido volta a aparecer quando o promotor "
+                "contar a loja de novo."
+            ),
+        )
+    if not sugestao.last_collection_day:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Este cliente ainda não tem duas coletas completas (gôndola e "
+                "estoque). Sem duas, não há venda para calcular."
+            ),
+        )
+    if not any(item.suggested_units > 0 for item in sugestao.items):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Nada a pedir: o estoque da loja cobre a venda de todos os "
+                "produtos."
+            ),
+        )
+
+    buf = pdf.build_order(sugestao, cliente, vendedor=context["user"].full_name)
+    return pdf.pdf_response(buf, pdf.order_filename(cliente.name))
 
 
 @router.put(

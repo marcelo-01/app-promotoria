@@ -16,9 +16,14 @@
   A tela zera sozinha toda semana: coleta anterior ao domingo mais recente vem
   do servidor com `stale` e a lista vazia — o que aparece aqui é o aviso e a
   data, não um pedido velho. Não há nada agendado; é comparação de data.
+
+  Havendo pedido, a barra do rodapé baixa a folha em PDF — o documento que o
+  vendedor entrega ao comprador da loja. Quem a monta é o servidor, com a mesma
+  conta que gerou esta tela; e ela é mais enxuta do que o que se vê aqui: só os
+  produtos com sugestão, sem a conta aberta. Ver `backend/.../pdf.py`.
 -->
 <template>
-  <q-page class="q-pa-md column pedidos-page">
+  <q-page class="q-pa-md column pedidos-page" :class="{ 'com-barra': comSugestao.length }">
     <q-select
       v-model="clienteId" :options="opcoes" outlined dense emit-value map-options
       use-input input-debounce="0" fill-input hide-selected
@@ -103,6 +108,24 @@
         </span>
       </div>
     </template>
+
+    <!-- Só aparece quando há pedido: sem item nenhum não há folha para baixar,
+         e é a mesma condição que o servidor usa para recusar o PDF. O total
+         daqui é o mesmo que sai no rodapé da folha. -->
+    <div v-if="comSugestao.length" class="barra-pdf row items-center q-gutter-sm">
+      <div class="col text-caption text-grey-8">
+        <div class="text-weight-bold text-body2">
+          {{ comSugestao.length }} {{ comSugestao.length === 1 ? 'item' : 'itens' }}
+          · {{ totalUnidades }} un
+        </div>
+        para levar ao comprador
+      </div>
+      <q-btn
+        size="lg" unelevated no-caps color="primary" class="col-auto"
+        icon="picture_as_pdf" label="Baixar PDF"
+        :loading="baixandoPdf" @click="baixarPdf"
+      />
+    </div>
   </q-page>
 </template>
 
@@ -119,6 +142,7 @@ const opcoes = ref([])
 const clienteId = ref(null)
 const carregandoClientes = ref(false)
 const carregando = ref(false)
+const baixandoPdf = ref(false)
 const sugestao = ref(null)
 
 const comSugestao = computed(() =>
@@ -126,6 +150,9 @@ const comSugestao = computed(() =>
 )
 const semSugestao = computed(() =>
   (sugestao.value?.items || []).filter((i) => i.suggested_units === 0)
+)
+const totalUnidades = computed(() =>
+  comSugestao.value.reduce((soma, i) => soma + i.suggested_units, 0)
 )
 
 /** 'AAAA-MM-DD' → 'DD/MM/AAAA' sem passar por Date (que leria como UTC). */
@@ -195,6 +222,21 @@ async function salvarFator({ item, fator, done }) {
   }
 }
 
+/**
+ * Baixa a folha do pedido. Quem monta o PDF é o servidor, com a mesma conta
+ * que gerou esta tela — baixar não muda nada aqui.
+ */
+async function baixarPdf() {
+  baixandoPdf.value = true
+  try {
+    await merchandisingApi.downloadOrderSuggestionPdf(clienteId.value)
+  } catch (error) {
+    $q.notify({ type: 'negative', message: error.message })
+  } finally {
+    baixandoPdf.value = false
+  }
+}
+
 watch(clienteId, carregarSugestao)
 
 onMounted(carregarClientes)
@@ -203,6 +245,29 @@ onMounted(carregarClientes)
 <style scoped>
 .pedidos-page {
   min-height: 100%;
+}
+
+/* Espaço para a barra fixa não cobrir o último produto da lista. */
+.pedidos-page.com-barra {
+  padding-bottom: 90px;
+}
+
+/* Mesmo desenho da barra de envio da contagem: fixa, altura de polegar. */
+.barra-pdf {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 78px;
+  padding: 0 12px calc(env(safe-area-inset-bottom, 0px)) 12px;
+  background: #fff;
+  border-top: 1px solid rgba(0, 0, 0, 0.1);
+  z-index: 10;
+}
+
+.body--dark .barra-pdf {
+  background: #1e1e2e;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .sem-sugestao {

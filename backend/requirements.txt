@@ -17,6 +17,9 @@ openpyxl>=3.1.0
 # linhas: o openpyxl leva mais de meio minuto nisso, o calamine (Rust) três
 # segundos — e a planilha é lida duas vezes, na prévia e na importação.
 python-calamine>=0.3.0
+# Monta a folha do pedido em PDF que o vendedor entrega ao comprador da loja.
+# Puro Python, e a tabela quebra de página sozinha repetindo o cabeçalho.
+reportlab>=4.0.0
 # Redimensiona a foto do produto no upload — foto de celular tem 4 MB e o
 # promotor carrega o catálogo inteiro na rede do supermercado
 Pillow>=10.0.0

@@ -338,6 +338,25 @@ class MerchandisingService:
             items=itens,
         )
 
+    @staticmethod
+    async def order_suggestion_for_pdf(
+        session: AsyncSession, tenant_id: UUID, user: User, customer_id: UUID,
+    ):
+        """A mesma sugestão da tela, com o cadastro do cliente junto.
+
+        A folha em PDF vai para a mão do comprador da loja e precisa de razão
+        social e CNPJ, que a `OrderSuggestionResponse` não carrega — ela é a
+        resposta de uma tela onde o vendedor já sabe em que cliente está.
+
+        A conta não se refaz aqui: quem a faz é `order_suggestion`, e ela já
+        checa o acesso deste usuário a este cliente.
+        """
+        sugestao = await MerchandisingService.order_suggestion(
+            session, tenant_id, user, customer_id
+        )
+        customer = await CustomersService.get(session, tenant_id, customer_id)
+        return sugestao, customer
+
     # ── Planilha de faturamento ───────────────────────────────────────────
 
     @staticmethod

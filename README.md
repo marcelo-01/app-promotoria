@@ -36,6 +36,13 @@ assim. **Toda semana a tela zera**: sugestão só vale se a coleta que a gerou f
 do domingo mais recente em diante — coleta da semana passada mostra um aviso no
 lugar da lista, para ninguém lançar um pedido em cima de número velho.
 
+Havendo pedido, uma barra no rodapé mostra o total (itens e unidades) e **baixa a
+folha em PDF** para o vendedor entregar ao comprador da loja: cabeçalho com o
+cliente, uma linha por produto com unidades e caixas, e espaço para observações e
+assinatura. Só os produtos com sugestão maior que zero entram, e a conta aberta
+fica de fora — o fator de giro é a aposta do vendedor sobre a loja, não assunto de
+quem compra.
+
 **Administrador** (desktop): cadastra clientes (só o nome), produtos (nome, foto e
 quantas unidades vêm numa caixa), promotores e vendedores (nome, e-mail e senha),
 define quais clientes cada um atende, e baixa as contagens em planilha `.xlsx` —
@@ -110,7 +117,8 @@ Usuários criados pelo `seed`:
 7. Volte ao admin em **Contagens recebidas** e baixe a planilha.
 8. Entre como o vendedor, escolha o cliente e veja a sugestão — ela só aparece a
    partir da **segunda** coleta completa do cliente, porque é da diferença entre
-   duas que sai a venda. O fator de giro se ajusta no campo de cada produto.
+   duas que sai a venda. O fator de giro se ajusta no campo de cada produto, e a
+   barra do rodapé baixa o pedido em PDF.
 
 ## Comandos
 

@@ -63,6 +63,7 @@ services:
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS}
       FRONTEND_URL: ${FRONTEND_URL}
       TIMEZONE: ${TIMEZONE:-America/Sao_Paulo}
+      COMPANY_NAME: ${COMPANY_NAME:-}
     volumes:
       # Fotos dos produtos. Sem este volume, um redeploy com --build apagaria
       # todas as fotos junto com a imagem antiga do contêiner.

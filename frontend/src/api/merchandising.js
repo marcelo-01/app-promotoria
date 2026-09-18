@@ -99,6 +99,22 @@ export const merchandisingApi = {
     )
   },
 
+  /**
+   * A folha do pedido em PDF, para o vendedor entregar ao comprador da loja.
+   *
+   * Quem monta é o servidor, com a mesma conta da tela — nada é recalculado
+   * aqui. Sem pedido a fazer (coleta velha, cliente sem duas coletas, tudo
+   * zero) ele recusa com 409, e o motivo vem legível no `Error`.
+   */
+  async downloadOrderSuggestionPdf(customerId) {
+    const response = await baixar(
+      `/merchandising/customers/${customerId}/order-suggestion.pdf`,
+      {},
+      'o PDF do pedido'
+    )
+    downloadBlob(response, 'pedido.pdf')
+  },
+
   // ── Administrador ─────────────────────────────────────────────────────
 
   /**
@@ -254,18 +270,21 @@ function motivoDaPlanilha(error) {
 }
 
 /**
- * GET de planilha, com o erro já legível.
+ * GET de arquivo (planilha ou PDF), com o erro já legível.
  *
  * Com `responseType: 'blob'` o corpo do erro também volta como Blob — o
  * `detail` que o servidor mandou ("a contagem de estoque ainda não chegou")
  * fica ilegível dentro dele, e a tela acabaria mostrando um erro genérico bem
  * onde o motivo importa.
+ *
+ * `rotulo` só aparece quando o servidor não explicou nada: é o que entra em
+ * "Erro ao gerar ___".
  */
-async function baixar(url, config = {}) {
+async function baixar(url, config = {}, rotulo = 'a planilha') {
   try {
     return await apiClient.get(url, { responseType: 'blob', ...config })
   } catch (error) {
-    throw new Error((await detalheDoErro(error)) || 'Erro ao gerar a planilha')
+    throw new Error((await detalheDoErro(error)) || `Erro ao gerar ${rotulo}`)
   }
 }
 
@@ -281,10 +300,10 @@ async function detalheDoErro(error) {
 }
 
 /** Extrai o nome do arquivo do Content-Disposition e dispara o download. */
-function downloadBlob(response) {
+function downloadBlob(response, padrao = 'planilha.xlsx') {
   const disposition = response.headers['content-disposition'] || ''
   const match = disposition.match(/filename="?([^"]+)"?/)
-  const filename = match ? match[1] : 'planilha.xlsx'
+  const filename = match ? match[1] : padrao
 
   const url = window.URL.createObjectURL(new Blob([response.data]))
   const link = document.createElement('a')

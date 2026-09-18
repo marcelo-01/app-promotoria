@@ -32,6 +32,12 @@ class Settings(BaseSettings):
     # contagem das 22h sai na planilha com a data do dia seguinte.
     timezone: str = "America/Sao_Paulo"
 
+    # Quem assina a folha do pedido que o vendedor entrega ao comprador da
+    # loja. Não sai de `Tenant.name`, que é slug ("fv-laticinios") e ficaria
+    # feio num documento que vai para a mão de terceiro. Vazio: a linha do
+    # fornecedor simplesmente não aparece no PDF.
+    company_name: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.api_env == "production"
