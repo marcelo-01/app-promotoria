@@ -41,22 +41,25 @@ class CountProductResponse(BaseModel):
     units: Optional[Decimal] = None
 
     # ── Vencimento ────────────────────────────────────────────────────────
-    # O servidor decide QUEM precisa de coleta (é ele que tem o histórico e as
-    # planilhas); o aparelho decide QUANDO barrar, com o total que acabou de ser
-    # contado. A conta não pode depender de rede: o promotor fecha a contagem sem
-    # sinal.
-    collect_expiry: bool = False
-    # 'nao_escoa' (no ritmo do ciclo, o estoque não sai antes de vencer) ou
-    # 'parado' (não vendeu nada no ciclo — estoque parado não sai sozinho)
-    expiry_reason: Optional[str] = None
+    # O servidor manda os INGREDIENTES da conta, e não o veredito. A ponta de
+    # cima do ciclo é a contagem que está sendo feita AGORA — ela não existe no
+    # banco na hora em que esta resposta é montada, e portanto só o aparelho
+    # pode fechar a conta. Quem a fecha é `frontend/src/lib/vencimento.js`, com
+    # a regra de `app/merchandising/expiry.py`.
+    #
+    # Tudo aqui é do intervalo que vai do último dia completo (o
+    # `expiry_previous_day` da folha) até hoje.
 
-    # A conta aberta, para a tela poder EXPLICAR por que este produto apareceu.
-    # Nulo em `days_to_clear` quer dizer "não escoa nunca", que é diferente de
-    # zero e não pode virar zero na serialização.
-    expiry_days_to_clear: Optional[Decimal] = None
+    # Validade na chegada, do cadastro. Nulo é produto que não entra na conta.
     expiry_shelf_life: Optional[int] = None
-    expiry_cycle_days: Optional[int] = None
-    expiry_sold: Optional[Decimal] = None
+    # O total do PAR (gôndola + estoque) no último dia completo. Nulo é produto
+    # sem história neste cliente — sem ponto de partida não há ciclo.
+    expiry_previous_stock: Optional[Decimal] = None
+    # O que entrou pelas planilhas do ERP e o que o promotor já retirou por
+    # vencimento dentro do intervalo.
+    expiry_invoiced: Decimal = Decimal(0)
+    expiry_gifted: Decimal = Decimal(0)
+    expiry_removed: Decimal = Decimal(0)
 
     model_config = {"from_attributes": True}
 
@@ -77,6 +80,13 @@ class CountSheetResponse(BaseModel):
     # Quadrado "não tem produtos aqui" — só vem marcado na folha de correção de
     # um envio que foi feito assim
     no_products: bool = False
+
+    # A ponta de baixo do ciclo do vencimento: o último dia em que gôndola e
+    # estoque foram contados neste cliente, sempre ANTERIOR a hoje. A ponta de
+    # cima é a contagem de hoje, que o aparelho tem em mãos. Nulo quer dizer que
+    # ainda não há dia completo nenhum — primeira visita à loja, e nada a prever.
+    expiry_previous_day: Optional[date] = None
+
     products: List[CountProductResponse] = []
 
 

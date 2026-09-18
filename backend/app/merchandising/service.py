@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
@@ -39,6 +39,25 @@ from app.products.service import ProductsService
 # completas apareçam. A conta usa só o último ciclo, mas um cliente que ficou um
 # mês sem visita ainda tem de ter as duas pontas dentro da janela.
 EXPIRY_WINDOW_DAYS = 120
+
+
+@dataclass(frozen=True)
+class _ExpiryInput:
+    """O que o aparelho precisa saber, por produto, para fechar a conta do
+    vencimento com a contagem de hoje em mãos.
+
+    Tudo no intervalo que vai do último dia completo até hoje.
+    """
+
+    previous_stock: float    # o total do par naquele dia
+    invoiced: float          # entrou pela planilha de faturamento
+    gifted: float            # entrou pela planilha de brinde
+    removed: float           # o promotor retirou por vencimento
+
+
+def _quantia(valor: float) -> Decimal:
+    """Float da série → Decimal da resposta, na mesma casa das quantidades."""
+    return Decimal(str(round(valor, 3)))
 
 
 def _is_admin(user: User) -> bool:
@@ -128,78 +147,111 @@ class MerchandisingService:
             # Sem mix cadastrado: cai no catálogo completo
             products = [(p, 0) for p in await Repo.list_all_products(session, tenant_id)]
 
-        avisos = await MerchandisingService._expiry_forecasts(
+        anterior, entradas = await MerchandisingService._expiry_inputs(
             session, tenant_id, customer_id, [p for p, _ in products]
         )
 
         vazio = (None, None, None)
+        linhas = []
+        for p, position in products:
+            entrada = entradas.get(p.id)
+            linhas.append(CountProductResponse(
+                id=p.id,
+                name=p.name,
+                image_url=p.image_url,
+                position=position,
+                package_size=p.package_size or Decimal(1),
+                last_boxes=last.get(p.id, vazio)[0],
+                last_units=last.get(p.id, vazio)[1],
+                last_quantity=last.get(p.id, vazio)[2],
+                expiry_shelf_life=p.arrival_shelf_life_days,
+                expiry_previous_stock=(
+                    _quantia(entrada.previous_stock) if entrada else None
+                ),
+                expiry_invoiced=_quantia(entrada.invoiced) if entrada else Decimal(0),
+                expiry_gifted=_quantia(entrada.gifted) if entrada else Decimal(0),
+                expiry_removed=_quantia(entrada.removed) if entrada else Decimal(0),
+            ))
+
         return CountSheetResponse(
             customer_id=customer.id,
             customer_name=customer.name,
             visit_type=visit_type,
-            products=[
-                CountProductResponse(
-                    id=p.id,
-                    name=p.name,
-                    image_url=p.image_url,
-                    position=position,
-                    package_size=p.package_size or Decimal(1),
-                    last_boxes=last.get(p.id, vazio)[0],
-                    last_units=last.get(p.id, vazio)[1],
-                    last_quantity=last.get(p.id, vazio)[2],
-                    collect_expiry=p.id in avisos,
-                    expiry_reason=avisos[p.id].reason if p.id in avisos else None,
-                    expiry_days_to_clear=(
-                        Decimal(str(round(avisos[p.id].days_to_clear, 1)))
-                        if p.id in avisos and avisos[p.id].days_to_clear is not None
-                        else None
-                    ),
-                    expiry_shelf_life=avisos[p.id].shelf_life if p.id in avisos else None,
-                    expiry_cycle_days=avisos[p.id].cycle_days if p.id in avisos else None,
-                    expiry_sold=(
-                        Decimal(str(round(avisos[p.id].sold, 3)))
-                        if p.id in avisos else None
-                    ),
-                )
-                for p, position in products
-            ],
+            expiry_previous_day=anterior,
+            products=linhas,
         )
 
     @staticmethod
-    async def _expiry_forecasts(
+    async def _expiry_inputs(
         session: AsyncSession, tenant_id: UUID, customer_id: UUID, products: list,
-    ) -> dict[UUID, expiry.Forecast]:
-        """Quais produtos deste cliente pedem coleta de vencimento hoje.
+    ) -> tuple[Optional[date], dict[UUID, _ExpiryInput]]:
+        """Os ingredientes da conta de vencimento — a conta em si é do aparelho.
 
-        Roda no SERVIDOR, ao abrir a folha — que é o único momento em que o
-        promotor está garantidamente com sinal (a tela de contagem já não abre
-        sem ele). O aparelho recebe a resposta pronta e, na hora de fechar a
-        contagem, só precisa comparar com o que acabou de contar: nada de rede no
-        meio do bloqueio.
+        O ciclo que decide a coleta termina NA CONTAGEM DE HOJE, e não na última
+        que está no banco: o que precisa caber dentro de uma validade é o estoque
+        que está na loja neste momento, com o promotor na frente dele. A ponta de
+        cima do ciclo, portanto, ainda não existe quando esta resposta é montada
+        — ela está sendo digitada.
 
-        Um produto entrar aqui não significa coletar. Significa que o estoque
-        DAQUELE produto naquela loja não escoa a tempo — se a contagem de hoje
-        der zero nele, não há mercadoria nem data para ler.
+        Daí a divisão: o servidor manda daqui o que só ele sabe (o estoque do
+        último dia completo, o que as planilhas do ERP registraram desde então, o
+        vencido já retirado) e o veredito é fechado em `lib/vencimento.js`, no fim
+        da contagem, sem depender de rede. A regra é a de `expiry.py`.
+
+        O `removed` é o que o servidor conhecia ao montar a folha: retirada
+        registrada depois disso não entra neste ciclo. Ela desconta no seguinte,
+        e o efeito de ficar de fora é uma venda um pouco maior — ou seja, menos
+        alarde, nunca mais.
         """
-        vidas = {
-            p.id: p.arrival_shelf_life_days
-            for p in products
-            if p.arrival_shelf_life_days
-        }
         # Sem nenhum produto com validade na chegada cadastrada não há o que
         # calcular — e nem por que ir ao banco buscar a história inteira.
-        if not vidas:
-            return {}
+        if not any(p.arrival_shelf_life_days for p in products):
+            return None, {}
 
-        ciclos, _ = await MerchandisingService._cycle_sales(session, tenant_id, customer_id)
+        series, _, hoje = await MerchandisingService._stock_series(
+            session, tenant_id, EXPIRY_WINDOW_DAYS, customer_id
+        )
 
-        avisos = {}
-        for product_id, vida in vidas.items():
-            ciclo = ciclos.get(product_id)
-            veredito = expiry.forecast(ciclo, vida) if ciclo else None
-            if veredito and veredito.alert:
-                avisos[product_id] = veredito
-        return avisos
+        # O último dia completo ANTES de hoje. O corte não é detalhe: numa folha
+        # reaberta depois de os dois lados já terem subido, hoje seria o "dia
+        # anterior" de si mesmo, e o ciclo daria zero dia.
+        dias = sorted({
+            dia
+            for serie in series
+            for dia, _, _, _ in serie.complete_days()
+            if dia < hoje
+        })
+        if not dias:
+            return None, {}
+
+        anterior = date.fromisoformat(dias[-1])
+        atual = date.fromisoformat(hoje)
+
+        estoques = {
+            serie.product_id: total
+            for serie in series
+            for dia, _, _, total in serie.complete_days()
+            if dia == dias[-1]
+        }
+        faturado = await Repo.sum_deliveries_in_cycle(
+            session, tenant_id, customer_id, anterior, atual, DeliveryKind.VENDA.value
+        )
+        brindes = await Repo.sum_deliveries_in_cycle(
+            session, tenant_id, customer_id, anterior, atual, DeliveryKind.BRINDE.value
+        )
+        retirados = await Repo.sum_removals_in_cycle(
+            session, tenant_id, customer_id, anterior, atual
+        )
+
+        return anterior, {
+            product_id: _ExpiryInput(
+                previous_stock=estoque,
+                invoiced=faturado.get(product_id, 0.0),
+                gifted=brindes.get(product_id, 0.0),
+                removed=retirados.get(product_id, 0.0),
+            )
+            for product_id, estoque in estoques.items()
+        }
 
     @staticmethod
     async def _cycle_sales(

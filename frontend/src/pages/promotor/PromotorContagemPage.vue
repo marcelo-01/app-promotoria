@@ -78,9 +78,11 @@
 
           <div class="foto-nome">{{ product.name }}</div>
 
-          <!-- Aviso, e não bloqueio: o bloqueio é no envio. Aparece aqui para
-               o promotor não ser surpreendido pela tela de datas no fim. -->
-          <q-badge v-if="product.collect_expiry" class="aviso-vencimento" color="orange-9">
+          <!-- Aviso, e não bloqueio: o bloqueio é no envio. É a MESMA conta do
+               envio, refeita a cada tecla — o promotor vê a cobrança chegando em
+               vez de ser surpreendido pela tela de datas no fim. Só acende com o
+               outro lado já fechado hoje: antes disso não há total para julgar. -->
+          <q-badge v-if="pedeVencimento(product.id)" class="aviso-vencimento" color="orange-9">
             <q-icon name="schedule" size="13px" class="q-mr-xs" />
             vencimento
           </q-badge>
@@ -199,6 +201,10 @@ const semProdutos = ref(false)
 // Onde esta contagem é feita. Na correção, vem do envio e não da URL.
 const tipo = ref(props.visitType)
 
+// A ponta de baixo do ciclo do vencimento: o último dia em que gôndola e estoque
+// foram contados neste cliente. A de cima é hoje, e está nos campos desta tela.
+const diaAnterior = ref(null)
+
 const ondeLabel = computed(() => (tipo.value === 'gondola' ? 'na gôndola' : 'no estoque'))
 
 /** Quadrado marcado: não há produto para contar, então não há painel para
@@ -219,6 +225,20 @@ const preenchidos = computed(
 )
 
 const imagem = (product) => mediaUrl(product.image_url)
+
+/**
+ * Os produtos que hoje pedem data de vencimento, com o que já foi digitado.
+ *
+ * Recalculado a cada tecla: é a mesma chamada que decide o envio, e é por isso
+ * que o selo no painel nunca discorda do bloqueio. Na correção de um envio
+ * antigo dá lista vazia — a folha de correção não traz ciclo nenhum.
+ */
+const pendentesDeVencimento = computed(() => visita.pendenciaDeVencimento(
+  props.customerId, tipo.value, products.value, totaisPorProduto(), diaAnterior.value,
+))
+
+const pedeVencimento = (productId) =>
+  pendentesDeVencimento.value.some((item) => item.product_id === productId)
 
 const formatQtd = (value) =>
   Number(value).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
@@ -270,9 +290,7 @@ function confirmarEnvio() {
   // Então esta contagem NÃO sobe agora. Ela fica no rascunho — onde já estava —
   // e só sai do aparelho depois que as datas fecharem.
   const desteLado = totaisPorProduto()
-  const pendentes = visita.pendenciaDeVencimento(
-    props.customerId, tipo.value, products.value, desteLado
-  )
+  const pendentes = pendentesDeVencimento.value
   if (pendentes.length) {
     return $q.dialog({
       title: 'Falta o vencimento',
@@ -418,6 +436,7 @@ onMounted(async () => {
     // Na correção o tipo vem do envio; na contagem nova, da URL.
     tipo.value = sheet.visit_type || props.visitType
     semProdutos.value = Boolean(editando.value ? sheet.no_products : draft.no_products)
+    diaAnterior.value = sheet.expiry_previous_day || null
 
     sheet.products.forEach((product) => {
       // Na correção o ponto de partida é o que está gravado no envio; na

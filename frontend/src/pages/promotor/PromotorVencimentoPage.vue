@@ -249,7 +249,7 @@ const podeEnviar = computed(
 /**
  * Por que este produto apareceu, em uma linha.
  *
- * É a conta do servidor dita em português. O promotor não precisa dela para
+ * É a conta do aparelho dita em português. O promotor não precisa dela para
  * digitar as datas — mas precisa dela para não achar que o aplicativo pediu por
  * acaso, e para conseguir discordar quando o número estiver errado.
  */

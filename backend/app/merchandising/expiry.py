@@ -1,9 +1,9 @@
-"""Qual produto precisa ter o vencimento coletado — e por quê.
+"""A venda de um produto num cliente entre duas contagens.
 
 Este módulo não fala com o banco. Recebe a história de um produto num cliente
 (as `Series` do `evolution`), o que entrou pelas planilhas e o que o promotor
-retirou por vencimento, e responde uma pergunta só: **no ritmo desta loja, o
-estoque que está lá hoje dura mais do que a mercadoria aguenta?**
+retirou por vencimento, e responde uma pergunta só: **quanto saiu pelo caixa
+desta loja no intervalo entre duas contagens?**
 
 A CONTA
 -------
@@ -18,36 +18,31 @@ descontá-las é a única coisa que a contagem não explica de outro jeito —
 mercadoria que saiu pelo caixa.
 
 Essa venda é um número que serve a mais de um veredito, e por isso ela sai numa
-`Cycle` à parte: daqui saem os "dias para escoar" que decidem a coleta de
-vencimento, e em `orders` sai a sugestão de pedido do vendedor. Uma conta só,
-dois leitores — corrigir a venda aqui corrige os dois.
+`Cycle` à parte: em `orders` ela vira a sugestão de pedido do vendedor, e no
+aparelho do promotor ela vira os "dias para escoar" que decidem a coleta de
+vencimento. Uma conta só, dois leitores — corrigir a venda aqui corrige os dois.
 
-Daí saem os dois números que decidem:
+ONDE FICA O VEREDITO DO VENCIMENTO
+----------------------------------
+Em `frontend/src/lib/vencimento.js`, e não aqui.
 
-    ciclos para escoar = estoque atual ÷ venda
+O ciclo que decide a coleta termina na contagem que o promotor está fazendo
+NAQUELE MOMENTO: o que precisa caber dentro de uma validade é o estoque que está
+na loja com ele na frente, não o da visita passada. Essa ponta de cima não existe
+no banco na hora em que o servidor monta a folha — ela está sendo digitada. Então
+o servidor manda os ingredientes (`service._expiry_inputs`) e o aparelho fecha a
+conta offline, no fim da contagem.
+
+A regra que ele aplica é esta, e está escrita por extenso do outro lado:
+
+    ciclos para escoar = estoque de hoje ÷ venda
     COLETA se (ciclos para escoar × dias do ciclo) > validade na chegada
-
-Ou seja: se o estoque de hoje, no ritmo de hoje, leva mais tempo para sair do que
-a mercadoria tem de vida ao chegar, ela vai vencer na prateleira.
 
 O QUE ESTA CONTA NÃO FAZ
 ------------------------
-Ela **não sabe a idade do que está na loja**. Pergunta "esse estoque cabe numa
-validade?", não "essas unidades específicas são velhas?". Duas consequências que
-valem estar escritas, porque não são defeito e sim desenho:
-
-* Ela avisa cedo e não alivia. Um produto de giro lento entra na lista já na
-  segunda contagem e fica lá enquanto a cobertura for alta.
-* Ela para de avisar se a venda acelerar, mesmo que ainda haja mercadoria velha
-  na loja. A cobertura despenca, e a conta não tem como saber que aquelas
-  unidades estão lá desde sempre.
-
-E ela continua sendo ESTIMATIVA em dois pontos: o giro sai de um ciclo só (uma
-semana atípica inverte o veredito), e a `venda` é um piso — entrega e venda que
-se anulem dentro do mesmo intervalo, com a nota fora da planilha, somem juntas.
-
-A data impressa na embalagem continua sendo a única verdade de campo, e só o
-promotor a enxerga. Esta conta escolhe A QUEM PERGUNTAR; não substitui a pergunta.
+Ela é ESTIMATIVA em dois pontos: o giro sai de um ciclo só (uma semana atípica
+inverte o veredito), e a `venda` é um piso — entrega e venda que se anulem dentro
+do mesmo intervalo, com a nota fora da planilha, somem juntas.
 """
 from __future__ import annotations
 
@@ -174,72 +169,3 @@ def cycle_sales(
         if ciclo:
             saida[chave] = ciclo
     return saida
-
-
-# ─── O veredito: coletar o vencimento? ────────────────────────────────────────
-
-
-@dataclass(frozen=True)
-class Forecast:
-    """O veredito de um produto num cliente, com a conta aberta.
-
-    Os campos intermediários não são enfeite: é por eles que a tela explica ao
-    promotor POR QUE aquele produto apareceu, e é por eles que se confere a conta
-    quando alguém desconfia dela.
-    """
-
-    customer_id: UUID
-    product_id: UUID
-
-    cycle_days: int          # dias entre as duas últimas contagens completas
-    previous_stock: float    # o que havia na contagem anterior
-    current_stock: float     # o que há agora
-    invoiced: float          # entrou pela planilha de faturamento
-    gifted: float            # entrou pela planilha de brinde
-    expired: float           # o promotor retirou por vencimento
-    sold: float              # a venda do cliente no ciclo (nunca negativa)
-
-    # None quando a venda deu zero ou menos: o estoque não escoa nunca.
-    cycles_to_clear: Optional[float]
-    days_to_clear: Optional[float]
-
-    shelf_life: int          # validade na chegada, do cadastro do produto
-    alert: bool
-    reason: str              # 'nao_escoa', 'parado' ou '' (sem alerta)
-
-
-def forecast(ciclo: Cycle, shelf_life: int) -> Optional[Forecast]:
-    """O veredito deste produto neste cliente.
-
-    Devolve `None` com o estoque atual zerado: não há mercadoria para vencer nem
-    data para ler. (O ciclo continua existindo — é o vendedor quem se importa
-    com ele nesse caso, não o promotor.)
-    """
-    if ciclo.current_stock <= EPS:
-        return None
-
-    if ciclo.sold <= EPS:
-        # Não girou nada no ciclo. Estoque parado não sai sozinho — vence.
-        ciclos = dias = None
-        motivo = "parado"
-    else:
-        ciclos = ciclo.current_stock / ciclo.sold
-        dias = ciclos * ciclo.cycle_days
-        motivo = "nao_escoa" if dias > shelf_life else ""
-
-    return Forecast(
-        customer_id=ciclo.customer_id,
-        product_id=ciclo.product_id,
-        cycle_days=ciclo.cycle_days,
-        previous_stock=ciclo.previous_stock,
-        current_stock=ciclo.current_stock,
-        invoiced=ciclo.invoiced,
-        gifted=ciclo.gifted,
-        expired=ciclo.expired,
-        sold=ciclo.sold,
-        cycles_to_clear=ciclos,
-        days_to_clear=dias,
-        shelf_life=shelf_life,
-        alert=bool(motivo),
-        reason=motivo,
-    )

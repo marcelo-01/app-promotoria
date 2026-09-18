@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { merchandisingApi } from '@/api/merchandising'
+import { diasEntre, veredito } from '@/lib/vencimento'
 
 const DRAFTS_KEY = 'estoque_drafts'
 const QUEUE_KEY = 'estoque_queue'
@@ -226,18 +227,32 @@ export const useVisitaStore = defineStore('visita', () => {
    * total para repartir em datas, e barrar o primeiro lado seria pedir o
    * vencimento de metade do estoque.
    *
-   * `products` é a folha que o servidor mandou ao abrir a tela — é de lá que vem
-   * o `collect_expiry`, calculado com o histórico que o aparelho não tem. Aqui
-   * só se cruza aquele aviso com o que acabou de ser contado: produto marcado
-   * que hoje deu zero não tem data nenhuma para ler.
+   * `products` é a folha que o servidor mandou ao abrir a tela, e `diaAnterior`
+   * é a ponta de baixo do ciclo que veio com ela. A ponta de cima é HOJE: quem
+   * fecha a conta é este aparelho, com o número que acabou de ser contado, e não
+   * o servidor com o retrato da visita passada. A regra está em `lib/vencimento`.
    */
-  function pendenciaDeVencimento(customerId, visitType, products, desteLado) {
+  function pendenciaDeVencimento(customerId, visitType, products, desteLado, diaAnterior) {
     if (!concluidaHoje(customerId, outroLado(visitType))) return []
+    if (!diaAnterior) return []
 
+    const ciclo = diasEntre(diaAnterior, diaLocal())
     const total = totalDoPar(customerId, visitType, desteLado)
-    return products
-      .filter((product) => product.collect_expiry && (total[product.id] || 0) > 0)
-      .map((product) => ({
+
+    const pendentes = []
+    products.forEach((product) => {
+      const conta = veredito({
+        shelfLife: product.expiry_shelf_life,
+        previousStock: product.expiry_previous_stock,
+        invoiced: product.expiry_invoiced,
+        gifted: product.expiry_gifted,
+        removed: product.expiry_removed,
+        currentStock: total[product.id] || 0,
+        cycleDays: ciclo,
+      })
+      if (!conta) return
+
+      pendentes.push({
         product_id: product.id,
         name: product.name,
         image_url: product.image_url || null,
@@ -245,12 +260,14 @@ export const useVisitaStore = defineStore('visita', () => {
         total: total[product.id],
         // A conta aberta, para a tela de vencimento poder explicar por que este
         // produto apareceu — sem precisar de rede para perguntar de novo.
-        expiry_reason: product.expiry_reason || null,
-        expiry_days_to_clear: product.expiry_days_to_clear ?? null,
-        expiry_shelf_life: product.expiry_shelf_life ?? null,
-        expiry_cycle_days: product.expiry_cycle_days ?? null,
-        expiry_sold: product.expiry_sold ?? null,
-      }))
+        expiry_reason: conta.reason,
+        expiry_days_to_clear: conta.daysToClear,
+        expiry_shelf_life: conta.shelfLife,
+        expiry_cycle_days: conta.cycleDays,
+        expiry_sold: conta.sold,
+      })
+    })
+    return pendentes
   }
 
   /** Retém a contagem e abre a coleta. O rascunho continua intacto: é ele que
