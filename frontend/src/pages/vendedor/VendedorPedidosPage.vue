@@ -66,7 +66,8 @@
       <template v-else>
         <div class="text-caption text-grey-7 q-px-xs q-mb-sm">
           Pedido = venda do ciclo × fator − estoque atual.
-          O fator é seu: 1 repõe o que vendeu, 2 dobra a cobertura (até 3).
+          O fator começa em 2 (dobra a cobertura) e é seu: 1 só repõe o que
+          vendeu, e vai até 3.
         </div>
 
         <q-banner v-if="!comSugestao.length" class="bg-green-1 text-green-10 rounded-borders q-mb-md">

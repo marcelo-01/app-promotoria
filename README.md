@@ -29,12 +29,15 @@ sugestão é
 onde a venda é a mesma da coleta de vencimento (o que saiu pelo caixa entre as
 duas últimas coletas completas do promotor) e o **fator de giro** (1 a 3, uma
 casa decimal) é o vendedor quem define, **produto a produto em cada loja**, no
-campo da própria linha: 1 repõe o que vendeu, 2 dobra a cobertura. Os produtos
-que a loja ainda cobre ficam numa seção recolhida embaixo, "Sem sugestão", com o
-mesmo campo — é por ali que ele sobe o fator de um produto que quer pedir mesmo
-assim. **Toda semana a tela zera**: sugestão só vale se a coleta que a gerou for
-do domingo mais recente em diante — coleta da semana passada mostra um aviso no
-lugar da lista, para ninguém lançar um pedido em cima de número velho.
+campo da própria linha: 1 repõe o que vendeu, 2 dobra a cobertura. Produto em
+que ele ainda não mexeu **começa em 2** — repor o que saiu é o pedido mais
+conservador que existe, e é mais fácil discordar de um número cheio do que
+lembrar de subir um tímido. Os produtos que a loja ainda cobre ficam numa seção
+recolhida embaixo, "Sem sugestão", com o mesmo campo — é por ali que ele sobe o
+fator de um produto que quer pedir mesmo assim. **Toda semana a tela zera**:
+sugestão só vale se a coleta que a gerou for do domingo mais recente em diante
+— coleta da semana passada mostra um aviso no lugar da lista, para ninguém
+lançar um pedido em cima de número velho.
 
 Havendo pedido, uma barra no rodapé mostra o total (itens e unidades) e **baixa a
 folha em PDF** para o vendedor entregar ao comprador da loja: cabeçalho com o

@@ -12,8 +12,10 @@ class TurnoverFactor(DeclarativeBase, TimestampMixin):
 
     É do PAR (cliente, produto), e não do vendedor: a mesma loja gira o leite
     condensado a 2 e o queijo a 1, e isso é característica da loja, que quem
-    assumir a rota depois herda junto com ela. Produto sem linha aqui vale 1 —
-    "repõe o que vendeu" — e é o que a tela mostra até o vendedor mexer.
+    assumir a rota depois herda junto com ela. Produto sem linha aqui vale o
+    `DEFAULT_FACTOR` de `orders.py` — hoje 2 —, e é o que a tela mostra até o
+    vendedor mexer. Quem decide isso é quem lê, não o banco: o `server_default`
+    abaixo nunca chega a ser usado, porque a gravação sempre manda o número.
     """
 
     __tablename__ = "turnover_factors"
@@ -22,7 +24,7 @@ class TurnoverFactor(DeclarativeBase, TimestampMixin):
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=False)
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id", ondelete="CASCADE"), nullable=False)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id", ondelete="CASCADE"), nullable=False)
-    turnover_factor = Column(Numeric(2, 1), nullable=False, default=1, server_default="1.0")
+    turnover_factor = Column(Numeric(2, 1), nullable=False, default=2, server_default="2.0")
 
     __table_args__ = (
         UniqueConstraint("tenant_id", "customer_id", "product_id", name="uq_turnover_factors"),

@@ -14,6 +14,11 @@ A venda é a mesma da coleta de vencimento — o que saiu pelo caixa entre as du
 em cada loja, de 1 a 3: com 1 o pedido repõe o que vendeu; com 2, dobra a
 cobertura. O que a loja ainda tem em estoque desconta do pedido.
 
+Produto em que ele ainda não mexeu vale `DEFAULT_FACTOR`, que é 2: o vendedor
+vai à loja para vender mais do que ela vendeu, e repor o que saiu é o pedido
+mais conservador que existe. Quem quiser só repor abaixa para 1 na linha — é
+mais fácil discordar de um número cheio do que lembrar de subir um tímido.
+
 Sugestão de zero ou menos vira zero: o estoque cobre a venda. O produto
 continua na resposta — com zero — porque é olhando para ele que o vendedor
 decide subir o fator. Estoque zerado, ao contrário, é o caso mais urgente, e é
@@ -35,9 +40,15 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from datetime import date, timedelta
+from decimal import Decimal
 from uuid import UUID
 
 from app.merchandising.expiry import EPS, Cycle
+
+# O fator de um produto em que o vendedor ainda não mexeu. Mora aqui, e não no
+# `.get(..., 2)` de quem lê o banco, porque é regra de negócio: mudá-lo muda
+# todo pedido de todo produto que ninguém ajustou ainda.
+DEFAULT_FACTOR = Decimal("2.0")
 
 
 @dataclass(frozen=True)

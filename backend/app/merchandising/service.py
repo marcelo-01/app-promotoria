@@ -293,7 +293,7 @@ class MerchandisingService:
                 since=hoje - timedelta(days=EXPIRY_WINDOW_DAYS),
             )
             sugestoes = [
-                orders.suggest(c, float(fatores.get(c.product_id, Decimal(1))))
+                orders.suggest(c, float(fatores.get(c.product_id, orders.DEFAULT_FACTOR)))
                 for c in ciclos.values()
                 # Produto inativado depois de contado fica de fora: não se pede
                 # o que saiu de linha.
@@ -316,7 +316,7 @@ class MerchandisingService:
                     cycle_days=s.cycle_days,
                     sold=Decimal(str(round(s.sold, 3))),
                     current_stock=Decimal(str(round(s.current_stock, 3))),
-                    turnover_factor=fatores.get(s.product_id, Decimal(1)),
+                    turnover_factor=fatores.get(s.product_id, orders.DEFAULT_FACTOR),
                     suggested_units=s.suggested,
                     suggested_boxes=(
                         Decimal(str(round(s.suggested / float(caixa), 1)))

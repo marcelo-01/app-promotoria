@@ -731,7 +731,8 @@ class MerchandisingRepository:
         session: AsyncSession, tenant_id: UUID, customer_id: UUID
     ) -> dict[UUID, Decimal]:
         """{product_id: fator} do que o vendedor já definiu nesta loja. Produto
-        fora do mapa vale 1 — quem lê decide, não o banco."""
+        fora do mapa vale o `DEFAULT_FACTOR` de `orders.py` — quem lê decide,
+        não o banco."""
         query = select(TurnoverFactor.product_id, TurnoverFactor.turnover_factor).where(
             TurnoverFactor.tenant_id == tenant_id,
             TurnoverFactor.customer_id == customer_id,
