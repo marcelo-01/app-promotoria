@@ -1,6 +1,10 @@
 <template>
-  <q-layout view="hHh lpR fFf">
+  <q-layout view="hHh lpR fFf" :style="{ '--altura-cabecalho': `${alturaCabecalho}px` }">
     <q-header elevated class="bg-primary text-white">
+      <!-- O título quebra linha em vez de cortar o nome do cliente, e aí o
+           cabeçalho passa dos 50px. As telas de contagem descontam esta altura
+           medida (`--altura-cabecalho`) para o painel caber acima da barra. -->
+      <q-resize-observer @resize="(tamanho) => (alturaCabecalho = tamanho.height)" />
       <q-toolbar>
         <q-btn
           v-if="canGoBack"
@@ -8,7 +12,7 @@
           aria-label="Voltar"
           @click="$router.back()"
         />
-        <q-toolbar-title class="text-subtitle1 text-weight-medium ellipsis">
+        <q-toolbar-title class="text-subtitle1 text-weight-medium titulo">
           {{ title }}
         </q-toolbar-title>
 
@@ -103,6 +107,7 @@ const visita = useVisitaStore()
 const { online } = useOfflineQueue()
 
 const dialogSenha = ref(false)
+const alturaCabecalho = ref(50)
 
 // Sem v-model no QTabs: com QRouteTab quem manda no destaque é a rota atual.
 
@@ -164,3 +169,16 @@ function logout() {
   router.push('/login')
 }
 </script>
+
+<style scoped>
+/* O QToolbarTitle corta o texto com reticências por conta própria. Aqui o
+   título leva o nome do cliente, que não se corta: quebra linha. Entrelinha
+   menor para duas linhas ainda caberem nos 50px do cabeçalho. */
+.titulo {
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.2;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+</style>

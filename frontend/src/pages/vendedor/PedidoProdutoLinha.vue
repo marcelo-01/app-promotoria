@@ -9,6 +9,12 @@
 -->
 <template>
   <q-card flat bordered class="item-card">
+    <!-- O nome numa linha só dele, na largura do card: espremido entre a foto e
+         o fator de giro, nome comprido virava uma palavra por linha. -->
+    <q-card-section class="q-pt-sm q-pb-none text-subtitle1 text-weight-bold nome">
+      {{ item.product_name || 'Produto' }}
+    </q-card-section>
+
     <q-card-section class="row items-center no-wrap q-py-sm">
       <q-avatar square size="56px" class="q-mr-md foto">
         <img v-if="mediaUrl(item.image_url)" :src="mediaUrl(item.image_url)" :alt="item.product_name">
@@ -16,9 +22,6 @@
       </q-avatar>
 
       <div class="col">
-        <div class="text-subtitle1 text-weight-bold ellipsis-2-lines">
-          {{ item.product_name || 'Produto' }}
-        </div>
         <div class="text-caption text-grey-7">
           vendeu {{ qtd(item.sold) }} · estoque {{ qtd(item.current_stock) }}
         </div>
@@ -137,6 +140,10 @@ function salvar() {
 <style scoped>
 .item-card {
   border-radius: 12px;
+}
+
+.nome {
+  line-height: 1.3;
 }
 
 .foto {

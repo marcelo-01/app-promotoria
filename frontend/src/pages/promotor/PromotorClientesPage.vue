@@ -32,7 +32,7 @@
         <q-card-section class="q-pb-sm">
           <div class="row items-center no-wrap">
             <q-avatar color="primary" text-color="white" icon="store" size="44px" class="q-mr-md" />
-            <div class="col text-h6 text-weight-bold ellipsis-2-lines">
+            <div class="col text-h6 text-weight-bold">
               {{ customer.name }}
             </div>
           </div>

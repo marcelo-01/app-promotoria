@@ -26,7 +26,7 @@
   <q-page class="q-pa-md column pedidos-page" :class="{ 'com-barra': comSugestao.length }">
     <q-select
       v-model="clienteId" :options="opcoes" outlined dense emit-value map-options
-      use-input input-debounce="0" fill-input hide-selected
+      use-input input-debounce="0"
       label="Cliente" class="q-mb-md bg-white"
       :loading="carregandoClientes"
       @filter="filtrar"

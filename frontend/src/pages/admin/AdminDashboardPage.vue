@@ -66,7 +66,7 @@
             />
             <q-chip
               v-if="produtoId" removable dense square color="grey-3" text-color="grey-9"
-              icon="filter_alt" @remove="verProduto(null)"
+              icon="filter_alt" class="chip-produto" @remove="verProduto(null)"
             >
               {{ historico?.product_name || 'produto' }}
             </q-chip>
@@ -190,8 +190,8 @@
                 clickable v-ripple @click="verProduto(p)"
               >
                 <q-item-section>
-                  <q-item-label class="ellipsis">{{ p.product_name }}</q-item-label>
-                  <q-item-label caption class="ellipsis">{{ p.customer_name }}</q-item-label>
+                  <q-item-label>{{ p.product_name }}</q-item-label>
+                  <q-item-label caption>{{ p.customer_name }}</q-item-label>
                 </q-item-section>
                 <q-item-section side>
                   <div class="text-right">
@@ -234,8 +234,8 @@
                   clickable v-ripple @click="verProduto(m)"
                 >
                   <q-item-section>
-                    <q-item-label class="ellipsis">{{ m.product_name }}</q-item-label>
-                    <q-item-label caption class="ellipsis">
+                    <q-item-label>{{ m.product_name }}</q-item-label>
+                    <q-item-label caption>
                       {{ m.customer_name }} · {{ m.days }} dias
                     </q-item-label>
                   </q-item-section>
@@ -272,8 +272,8 @@
                 clickable v-ripple @click="verProduto(f)"
               >
                 <q-item-section>
-                  <q-item-label class="ellipsis">{{ f.product_name }}</q-item-label>
-                  <q-item-label caption class="ellipsis">{{ f.customer_name }}</q-item-label>
+                  <q-item-label>{{ f.product_name }}</q-item-label>
+                  <q-item-label caption>{{ f.customer_name }}</q-item-label>
                   <q-item-label v-if="f.repeated" class="q-mt-xs">
                     <q-chip dense square outline color="orange-9" icon="repeat" class="q-ml-none">
                       Repetido
@@ -549,8 +549,11 @@ onBeforeUnmount(() => observador?.disconnect())
   flex: 1 1 240px;
   min-width: 0;
 }
+/* Encolhe só quando já está sozinho na linha e ainda assim não cabe — o chip
+   com o nome do produto comprido; aí o nome quebra em vez de vazar da tela. */
 .cabecalho__acoes {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 
 .grafico {
@@ -596,5 +599,17 @@ onBeforeUnmount(() => observador?.disconnect())
 /* Números em coluna precisam alinhar entre as linhas. */
 .numero-tabela {
   font-variant-numeric: tabular-nums;
+}
+
+/* O QChip tem altura de uma linha e não quebra o texto; nome de produto
+   comprido vazava para fora dele. */
+.chip-produto {
+  height: auto;
+  min-height: 1.5em;
+  padding-top: 2px;
+  padding-bottom: 2px;
+}
+.chip-produto :deep(.q-chip__content) {
+  white-space: normal;
 }
 </style>

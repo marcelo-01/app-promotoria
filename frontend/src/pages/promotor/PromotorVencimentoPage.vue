@@ -398,8 +398,8 @@ watch(
 /* Mesma moldura da contagem: painel de altura fixa entre o cabeçalho e a barra
    de envio, com scroll-snap. `svh` para o teclado não encolher o painel. */
 .painel-scroll {
-  height: calc(100vh - 50px - 78px);
-  height: calc(100svh - 50px - 78px);
+  height: calc(100vh - var(--altura-cabecalho, 50px) - 78px);
+  height: calc(100svh - var(--altura-cabecalho, 50px) - 78px);
   overflow-y: auto;
   scroll-snap-type: y mandatory;
   -webkit-overflow-scrolling: touch;

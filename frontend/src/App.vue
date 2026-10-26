@@ -56,5 +56,13 @@ onMounted(() => {
 .q-dialog__inner > .q-card {
   margin: 0 auto;
 }
+
+/* O QSelect mostra o item escolhido numa linha só, cortado com reticências.
+   Nome de cliente e de produto não se corta: quebra em quantas linhas precisar,
+   e o campo cresce junto. */
+.q-select .q-field__native > .ellipsis {
+  white-space: normal;
+  overflow: visible;
+}
 </style>
 

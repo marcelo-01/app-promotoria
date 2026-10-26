@@ -472,10 +472,12 @@ function numeroDoCampo(value) {
 }
 
 /* Altura fixa + snap: cada arraste para baixo encaixa o próximo produto.
-   `svh` e não `dvh` para o painel não encolher quando o teclado abre. */
+   `svh` e não `dvh` para o painel não encolher quando o teclado abre.
+   O cabeçalho não tem altura fixa — o título quebra linha quando o nome do
+   cliente é comprido —, então a altura dele vem medida do layout. */
 .painel-scroll {
-  height: calc(100vh - 50px - 78px);
-  height: calc(100svh - 50px - 78px);
+  height: calc(100vh - var(--altura-cabecalho, 50px) - 78px);
+  height: calc(100svh - var(--altura-cabecalho, 50px) - 78px);
   overflow-y: auto;
   scroll-snap-type: y mandatory;
   -webkit-overflow-scrolling: touch;
