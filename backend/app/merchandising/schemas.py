@@ -1,6 +1,6 @@
 from datetime import date, datetime
 from decimal import Decimal
-from typing import List, Optional
+from typing import Annotated, List, Optional
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -55,7 +55,7 @@ class CountProductResponse(BaseModel):
     # O total do PAR (gôndola + estoque) no último dia completo. Nulo é produto
     # sem história neste cliente — sem ponto de partida não há ciclo.
     expiry_previous_stock: Optional[Decimal] = None
-    # O que entrou pelas planilhas do ERP e o que o promotor já retirou por
+    # O que entrou pelas notas do ERP e o que o promotor já retirou por
     # vencimento dentro do intervalo.
     expiry_invoiced: Decimal = Decimal(0)
     expiry_gifted: Decimal = Decimal(0)
@@ -90,11 +90,11 @@ class CountSheetResponse(BaseModel):
     products: List[CountProductResponse] = []
 
 
-# ─── Planilha de faturamento ──────────────────────────────────────────────────
+# ─── Faturamento e brindes do ERP ─────────────────────────────────────────────
 
 
 class UnknownKeyResponse(BaseModel):
-    """Um código da planilha que não existe no cadastro deste app.
+    """Um código das notas do ERP que não existe no cadastro deste app.
 
     É a lista de trabalho da tela: cada linha aqui é mercadoria que entrou num
     cliente e o sistema não conseguiu contabilizar. Vem com quanto ficou de fora
@@ -109,17 +109,15 @@ class UnknownKeyResponse(BaseModel):
 
 
 class InvoiceImportResponse(BaseModel):
-    """O relato de uma planilha lida — igual na prévia e na importação."""
-
-    # Só preenchido quando o arquivo não tem as colunas esperadas. Nesse caso
-    # nada mais vem: não dá para relatar sobre um arquivo que não foi entendido.
-    missing_columns: List[str] = []
+    """O relato de uma leva de notas: o que entrou, o que ficou de fora e por
+    quê. Um por origem em cada sincronização, guardado no recibo dela."""
 
     # 'venda' (faturamento) ou 'brinde'
     kind: str = "venda"
 
+    # Itens de nota no pacote (um por produto e CFOP em cada nota)
     total_lines: int = 0
-    # Linhas de entrada de mercadoria em cliente, já limpas
+    # Itens de entrada de mercadoria em cliente, já limpos
     usable_lines: int = 0
     # O que o CFOP deixou de fora. No faturamento, devolução e outras entradas —
     # a devolução só é lançada no ERP quando a mercadoria volta ao estoque, dias
@@ -127,42 +125,134 @@ class InvoiceImportResponse(BaseModel):
     # remessa ao cliente: transferência entre filiais, retorno, consumo interno,
     # baixa por perda.
     ignored_cfop: int = 0
+    # Sem peças (o item pesado sem a contagem de peças) ou sem código de produto
     ignored_incomplete: int = 0
-    # Linhas cuja quantidade é PESO, não contagem de peças (só na de brindes,
-    # que não traz coluna de peças). Descartadas em vez de chutadas.
-    ignored_weight: int = 0
 
+    # O período que o envio trocou inteiro
     first_day: Optional[date] = None
     last_day: Optional[date] = None
 
-    # Linhas que casaram com cliente E produto do cadastro
+    # Itens que casaram com cliente E produto do cadastro
     matched_lines: int = 0
     matched_quantity: Decimal = Decimal(0)
-    # true = gravado; false = foi só prévia
-    saved: bool = False
+    # Quantos clientes deste app receberam mercadoria no período
+    matched_customers: int = 0
+    # Quantas entradas havia gravadas no período antes do envio, que ele trocou
+    previous_lines: int = 0
 
+    # As listas vêm cortadas nas maiores (a de clientes traz todo cliente do
+    # ERP que comprou no período e não é atendido aqui — milhares); o total
+    # diz quantas são ao todo.
     unknown_customers: List[UnknownKeyResponse] = []
+    unknown_customers_total: int = 0
     unknown_products: List[UnknownKeyResponse] = []
-    # A quebra por motivo do que ENTROU (só na planilha de brindes). É por aqui
-    # que se confere se o filtro de CFOP pegou o que devia.
+    unknown_products_total: int = 0
+    # A quebra por motivo do que ENTROU (só nos brindes). É por aqui que se
+    # confere se o filtro de CFOP pegou o que devia.
     by_reason: List[UnknownKeyResponse] = []
 
 
 class InvoiceImportRecordResponse(BaseModel):
-    """Uma planilha que já entrou — o que a tela lista embaixo do campo de
-    anexar para responder "essa eu já mandei?"."""
+    """Uma leva de notas que já entrou — o que a tela lista para responder
+    "os números de ontem já chegaram?"."""
 
     id: UUID
     kind: str
+    # 'erp' (sincronização) ou 'planilha' (anexada à mão, antes dela)
+    source: str = "planilha"
     file_name: str
     imported_at: Optional[datetime] = None
-    # Nome (ou e-mail) de quem anexou; nulo se o usuário foi apagado.
+    # Nome (ou e-mail) de quem anexou a planilha; nulo na sincronização.
     imported_by: Optional[str] = None
+    # Data da cópia do banco do ERP que o computador da empresa leu.
+    copy_at: Optional[datetime] = None
     first_day: Optional[date] = None
     last_day: Optional[date] = None
     total_lines: int = 0
     matched_lines: int = 0
     matched_quantity: Decimal = Decimal(0)
+    # Só no recibo mais recente de cada origem, e só quando pedido.
+    report: Optional[InvoiceImportResponse] = None
+
+
+# ─── O pacote da sincronização com o ERP ──────────────────────────────────────
+#
+# O que o `sync/sincronizar.py` monta a partir da cópia do banco do ERP. Os
+# códigos `erp_id` são os do Firebird (CLIENTES.ID_CLIENTE, PRODUTOS.ID_PRODUTO);
+# as notas apontam para eles, e o cadastro de cada um vai uma vez só.
+
+# Código de uma coluna INTEGER do Firebird
+ErpId = Annotated[int, Field(ge=0, le=2_147_483_647)]
+
+
+class ErpCustomer(BaseModel):
+    erp_id: ErpId
+    # CLIENTES.CODIGO, o código que aparece no ERP (a "COD. CLIENTE" da planilha)
+    code: Optional[str] = Field(default=None, max_length=40)
+    # CNPJ (CGC) ou, sem ele, o CPF — só dígitos. É por ele que o cliente casa.
+    document: Optional[str] = Field(default=None, max_length=20)
+    name: Optional[str] = Field(default=None, max_length=255)
+
+
+class ErpProduct(BaseModel):
+    erp_id: ErpId
+    # PRODUTOS.CODIGO (A51000), o `sku` do cadastro daqui. É por ele que o
+    # produto casa.
+    code: Optional[str] = Field(default=None, max_length=50)
+    name: Optional[str] = Field(default=None, max_length=255)
+
+
+class ErpItem(BaseModel):
+    product: ErpId
+    cfop: Optional[str] = Field(default=None, max_length=10)
+    # NUM_PECAS somado por produto e CFOP na nota
+    pieces: float = 0
+
+
+class ErpDocument(BaseModel):
+    """Uma nota de venda (VENDAS) ou de brinde (BRINDES)."""
+
+    # VENDAS.ID_VENDA ou BRINDES.ID_BRINDE — o Nº VENDA e o Nº BRINDE das
+    # planilhas
+    number: int = Field(gt=0, le=2_147_483_647)
+    # VENDAS.DATA / BRINDES.DATA — a EMISSÃO da planilha
+    issued_on: date
+    invoice: Optional[str] = Field(default=None, max_length=40)
+    company: Optional[str] = Field(default=None, max_length=120)
+    customer: ErpId
+    # O motivo do brinde (MOTIVODEVOLUCAO.NOME); vazio na venda
+    reason: Optional[str] = Field(default=None, max_length=120)
+    items: List[ErpItem] = Field(min_length=1, max_length=5000)
+
+
+class ErpSyncPackage(BaseModel):
+    # Data do arquivo da cópia do banco no computador que enviou
+    copy_at: Optional[datetime] = None
+    # O período lido: as notas de `first_day` a `last_day`, que é o último dia
+    # com venda na cópia. É este período que o envio troca inteiro.
+    first_day: date
+    last_day: date
+    customers: List[ErpCustomer] = Field(default=[], max_length=200_000)
+    products: List[ErpProduct] = Field(default=[], max_length=100_000)
+    # Nulo: a leitura falhou no computador, e ficam as entradas do envio
+    # anterior. Lista vazia: não houve nota no período.
+    sales: Optional[List[ErpDocument]] = Field(default=None, max_length=500_000)
+    gifts: Optional[List[ErpDocument]] = Field(default=None, max_length=500_000)
+    # Confirma um envio que apagaria mais da metade das entradas do período
+    # (`sincronizar.py --forcar`)
+    force: bool = False
+
+
+class ErpSyncResponse(BaseModel):
+    """O que a sincronização responde ao computador que enviou."""
+
+    received_at: datetime
+    copy_at: Optional[datetime] = None
+    first_day: date
+    last_day: date
+    # Nulo: a origem não veio no pacote, e ficaram as entradas de antes
+    sales: Optional[InvoiceImportResponse] = None
+    gifts: Optional[InvoiceImportResponse] = None
 
 
 # ─── Vencido retirado da loja ─────────────────────────────────────────────────

@@ -3,7 +3,7 @@
  *
  * Esta é a metade de campo da conta que começa em `app/merchandising/expiry.py`.
  * O servidor manda os ingredientes na folha de contagem (o estoque do último dia
- * completo, o que as planilhas do ERP registraram desde então, o vencido já
+ * completo, o que as notas do ERP registraram desde então, o vencido já
  * retirado, a validade na chegada); aqui eles se fecham com o número que o
  * promotor acabou de contar.
  *

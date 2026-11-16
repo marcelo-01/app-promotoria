@@ -50,8 +50,8 @@ def _check_arrival(payload):
 
 class ProductCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    # Código do item no ERP ('A21030'). É por ele que a planilha de faturamento
-    # encontra este produto — sem ele, as notas daquele item ficam de fora.
+    # Código do item no ERP ('A21030'). É por ele que as notas do ERP encontram
+    # este produto — sem ele, as notas daquele item ficam de fora.
     sku: Optional[str] = Field(default=None, max_length=50)
     package_size: Decimal = _PACKAGE_SIZE
     shelf_life_days: Optional[int] = _SHELF_LIFE_DAYS

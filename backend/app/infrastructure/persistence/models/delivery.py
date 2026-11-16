@@ -2,11 +2,13 @@ import enum
 from uuid import uuid4
 
 from sqlalchemy import (
-    Column, Date, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint,
+    Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String,
+    UniqueConstraint,
 )
 from sqlalchemy import Uuid as UUID
 
 from app.infrastructure.persistence.base import DeclarativeBase, TimestampMixin
+from app.infrastructure.persistence.types import FlexibleJSON
 
 
 class DeliveryKind(str, enum.Enum):
@@ -22,10 +24,24 @@ class DeliveryKind(str, enum.Enum):
     BRINDE = "brinde"
 
 
+class ImportSource(str, enum.Enum):
+    """Por onde as notas chegaram.
+
+    Até nov/2026 eram planilhas exportadas do ERP e anexadas à mão. Desde
+    então é a sincronização com o banco do ERP, que o computador da empresa
+    roda (`sync/sincronizar.py`). Os recibos das planilhas continuam na mesma
+    tabela, como histórico.
+    """
+
+    PLANILHA = "planilha"
+    ERP = "erp"
+
+
 class ProductDelivery(DeclarativeBase, TimestampMixin):
     """O que a empresa mandou para um cliente — uma linha por item.
 
-    Vem da planilha de faturamento do ERP, anexada pelo administrador. É a
+    Vem das notas do ERP: a sincronização que o computador da empresa roda
+    (antes, a planilha anexada pelo administrador). É a
     metade da história que a contagem do promotor nunca conseguiu ver: a
     diferença entre duas contagens é líquida, e sem saber o que ENTROU não há
     como distinguir "o cliente vendeu 20" de "o cliente vendeu 40 e recebeu 20".
@@ -46,16 +62,17 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
     customer_id = Column(UUID(as_uuid=True), ForeignKey("customers.id"), nullable=False)
     product_id = Column(UUID(as_uuid=True), ForeignKey("products.id"), nullable=False)
 
-    # 'venda' (planilha de faturamento) ou 'brinde' (planilha de brindes).
+    # 'venda' (faturamento: VENDAS) ou 'brinde' (BRINDES), no ERP.
     # String e não Enum nativo, pelo mesmo motivo de `stock_visits.status`: evita
     # ALTER TYPE no dia em que aparecer uma terceira origem.
     kind = Column(String(10), nullable=False, default=DeliveryKind.VENDA.value)
 
     issued_on = Column(Date, nullable=False)
 
-    # N. PEÇAS da planilha, e não QUANTIDADE: a coluna de quantidade mistura
-    # unidades e quilos (queijo é faturado por peso), e somá-la daria quilos com
-    # unidades no mesmo balde. Peças é o que o promotor conta na prateleira.
+    # As peças do item (LISTAVENDA/LISTABRINDE.NUM_PECAS, a coluna N. PEÇAS da
+    # planilha), e não QUANTIDADE: a quantidade mistura unidades e quilos
+    # (queijo é faturado por peso), e somá-la daria quilos com unidades no mesmo
+    # balde. Peças é o que o promotor conta na prateleira.
     quantity = Column(Numeric(15, 3), nullable=False, default=0)
 
     # ── A chave natural da linha ──────────────────────────────────────────
@@ -64,8 +81,12 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
     # no upload do dia seguinte. A empresa entra junto porque são duas (matriz e
     # filial) e nada garante que a numeração siga compartilhada para sempre.
     #
-    # No brinde a planilha não traz empresa; entra '—' e a chave se apoia no
-    # número do brinde, que é único no relatório inteiro.
+    # Na sincronização, `sale_number` é o VENDAS.ID_VENDA (ou BRINDES.ID_BRINDE)
+    # e `company` é o nome da empresa no ERP (CADASTROEMPRESA). Nas linhas que
+    # vieram da planilha, `company` tem lixo: o cabeçalho da exportação tinha
+    # uma coluna a menos que os dados, e a coluna EMPRESA lia a comissão do
+    # supervisor ("0", "0.096"). Por isso a sincronização não tenta casar a
+    # chave com a das planilhas: ela troca o período inteiro.
     company = Column(String(120), nullable=False)
     sale_number = Column(String(40), nullable=False)
 
@@ -85,16 +106,18 @@ class ProductDelivery(DeclarativeBase, TimestampMixin):
 
 
 class InvoiceImport(DeclarativeBase, TimestampMixin):
-    """O recibo de uma planilha importada: qual arquivo, quando, por quem e
-    quanto dele entrou.
+    """O recibo de cada leva de notas que entrou: de onde, quando e quanto.
 
-    As linhas de `product_deliveries` não sabem de que arquivo vieram — e
-    reanexar substitui a linha, apagando o rastro. Sem este registro, quem
-    anexa uma planilha e volta à tela no dia seguinte não tem como responder
-    "essa já entrou?" a não ser anexando de novo e conferindo os números.
+    Uma por origem (venda ou brinde) em cada sincronização com o ERP — e, antes
+    dela, uma por planilha anexada (`source = 'planilha'`, com o nome do
+    arquivo e quem anexou).
 
-    É só recibo: não se apaga nem se edita, e apagar um não desfaz a
-    importação. As entradas continuam gravadas por conta própria.
+    As linhas de `product_deliveries` não sabem de que envio vieram — e o envio
+    seguinte as troca, apagando o rastro. Sem este registro, quem abre a tela
+    não tem como responder "os números de ontem já chegaram?".
+
+    É só recibo: apagar um não desfaz a importação. As entradas continuam
+    gravadas por conta própria.
     """
 
     __tablename__ = "invoice_imports"
@@ -108,9 +131,16 @@ class InvoiceImport(DeclarativeBase, TimestampMixin):
 
     # 'venda' ou 'brinde' — a mesma origem das entradas que este recibo cobre.
     kind = Column(String(10), nullable=False, default=DeliveryKind.VENDA.value)
+    # 'planilha' ou 'erp' (ver `ImportSource`).
+    source = Column(
+        String(10), nullable=False, default=ImportSource.ERP.value,
+        server_default=ImportSource.PLANILHA.value,
+    )
+    # O nome do arquivo anexado. Na sincronização, só um rótulo.
     file_name = Column(String(255), nullable=False)
 
-    # O período coberto pela planilha (menor e maior EMISSÃO das linhas úteis).
+    # O período coberto. Na planilha, a menor e a maior EMISSÃO das linhas
+    # úteis; na sincronização, o período que o envio trocou inteiro.
     first_day = Column(Date, nullable=True)
     last_day = Column(Date, nullable=True)
 
@@ -118,6 +148,17 @@ class InvoiceImport(DeclarativeBase, TimestampMixin):
     # Linhas que casaram com cliente E produto — as que de fato entraram.
     matched_lines = Column(Integer, nullable=False, default=0)
     matched_quantity = Column(Numeric(15, 3), nullable=False, default=0)
+
+    # ── Só na sincronização ───────────────────────────────────────────────
+    # A hora do envio, assinada no cabeçalho. Pacote com hora igual ou
+    # anterior à do último aceito é recusado (reenvio de pacote capturado).
+    sent_at = Column(DateTime(timezone=True), nullable=True)
+    # A data da cópia do banco do ERP que o computador leu.
+    copy_at = Column(DateTime(timezone=True), nullable=True)
+    # O relato do envio (`InvoiceImportResponse`), que a tela mostra. Só o
+    # recibo mais recente de cada origem o guarda: o envio seguinte apaga o do
+    # anterior, que já não descreve o que está gravado.
+    report = Column(FlexibleJSON, nullable=True)
 
     __table_args__ = (
         Index("idx_invoice_imports_list", "tenant_id", "kind", "created_at"),

@@ -98,11 +98,12 @@ Usuários criados pelo `seed`:
 ## Primeiro uso
 
 1. Entre como `admin`.
-2. **Cadastros → Clientes** e **→ Produtos** → cadastre os clientes (só o nome) e os
-   produtos (nome + foto + unidades por caixa). A foto é o que o promotor usa para
-   reconhecer a embalagem na gôndola, então vale tirar uma boa; as unidades por
-   caixa são o que converte a contagem na planilha (produto vendido só a granel
-   fica com 1).
+2. **Cadastros → Clientes** e **→ Produtos** → cadastre os clientes (nome e CNPJ) e os
+   produtos (nome + código do ERP + foto + unidades por caixa). A foto é o que o
+   promotor usa para reconhecer a embalagem na gôndola, então vale tirar uma boa; as
+   unidades por caixa são o que converte a contagem na planilha (produto vendido só a
+   granel fica com 1). O CNPJ e o código do ERP são opcionais, mas é por eles que as
+   notas do ERP entram (ver [Faturamento e brindes do ERP](#faturamento-e-brindes-do-erp)).
 3. **Cadastros → Promotores** (e **→ Vendedores**) → crie a pessoa com nome, e-mail e senha.
    Quem conta a loja **e** lança o pedido é uma pessoa só, com um login: marque
    "Também é vendedor" (ou "Também é promotor") ao criar, ou ligue o interruptor na
@@ -122,6 +123,66 @@ Usuários criados pelo `seed`:
    partir da **segunda** coleta completa do cliente, porque é da diferença entre
    duas que sai a venda. O fator de giro se ajusta no campo de cada produto, e a
    barra do rodapé baixa o pedido em PDF.
+
+## Faturamento e brindes do ERP
+
+A venda de um produto num cliente sai da diferença entre duas contagens **mais o
+que entrou entre elas**: o faturamento e os brindes do ERP. Essas notas chegam
+sozinhas, como no BI Mais Vida e no EFFEX Trade: o computador da empresa lê a
+cópia do banco do ERP (Firebird) e manda para o app.
+
+```
+  cópia do banco do ERP     sync\sincronizar-faturamento-e-brindes.bat      app
+  (Firebird, ~7 GB)    ──►  lê as notas de venda e de brinde dos     ──►    troca as entradas
+                            últimos 120 dias e manda (~0,5 MB)              do período inteiro
+```
+
+- **O que vai:** as notas não canceladas a cliente (`VENDAS`/`LISTAVENDA` e
+  `BRINDES`/`LISTABRINDE`, só `TIPOCLIENTE = 'CLIENTE'`) dos 120 dias que terminam
+  no último dia com venda na cópia, com as peças de cada produto (`NUM_PECAS`), o
+  CFOP, a empresa e o motivo do brinde.
+- **O que entra:** as regras das planilhas que a sincronização substituiu. No
+  faturamento, CFOP de saída (5xxx e 6xxx); no brinde, só a remessa ao cliente
+  (5910 e 6910), sem transferência, retorno e perda. O cliente casa pelo **CNPJ** e
+  o produto pelo **código do ERP**; o que não casa vira a lista de tarefas da tela
+  **Faturamento do ERP**, que também diz se os números estão em dia.
+- **Como grava:** cada envio troca as entradas do período inteiro, numa transação
+  só. A nota cancelada ou corrigida no ERP some ou muda no envio seguinte, e rodar
+  de novo não duplica nada.
+- **Freios:** o pacote vai assinado com HMAC-SHA256 (a chave nunca trafega); pacote
+  com hora de envio igual ou anterior à do último aceito é recusado; e o envio que
+  deixaria o período com menos da metade das entradas de hoje (cópia do banco
+  incompleta) só passa confirmado com `--forcar`.
+
+**No computador da empresa** — o mesmo do BI e do EFFEX, que já tem o Python, o
+`fdb` e o Firebird:
+
+1. Copie `sync\config.exemplo.ini` para `sync\config.ini` e preencha a senha do
+   banco (a mesma do `config.ini` do EFFEX) e, em `[envio] chave`, a mesma
+   `ERP_SYNC_KEY` do servidor.
+2. Dois cliques em `sync\sincronizar-faturamento-e-brindes.bat` depois de cada cópia
+   nova do banco. Leva uns 10 segundos e mostra o resumo; cada execução deixa uma
+   linha em `sync\sincronizar.log`.
+
+Com `--sem-enviar`, o `.bat` só lê a cópia e mostra o resumo, sem mandar nada.
+
+**No servidor:** `ERP_SYNC_KEY` no `.env` (ver [Configurar](#configurar)) e
+`make prod-up`. Sem ela, a rota que recebe o pacote (`POST
+/merchandising/erp/sync`) responde 503 e nada entra.
+
+| O `.bat` mostra | O que fazer |
+|---|---|
+| `sem conexão com https://estoque.maisvida.cloud/api` | A internet do PC caiu ou o app está fora do ar. Tente abrir o app no navegador. |
+| `o relógio do computador que envia está mais de 15 minutos diferente do servidor` | Acerte a hora do Windows: Configurações › Hora e idioma › Sincronizar agora. |
+| `Assinatura inválida` | A `chave` do `sync\config.ini` não é a `ERP_SYNC_KEY` do `.env` do servidor. |
+| `Sincronização desligada` | Falta a `ERP_SYNC_KEY` no `.env` do servidor (e o `make prod-up` depois). |
+| `O envio deixaria o faturamento ... com N entradas, e hoje há M` | Confira se a cópia do banco terminou de ser gravada. Se a queda for de propósito (clientes ou produtos saíram do app), rode com `--forcar`. |
+| `falha ao ler o banco` | O problema é no PC: o serviço *Firebird Server - DefaultInstance* parado, ou a cópia ainda sendo gravada. |
+| `o servidor ainda não tem a sincronização` | O app no servidor está na versão anterior: publique a nova. |
+
+Para testar no computador: `ERP_SYNC_KEY` no `.env` de desenvolvimento, a mesma em
+`chave` no `sync\config.ini` e `destino = http://localhost:8002` lá; `make up` e o
+`.bat`.
 
 ## Comandos
 
@@ -165,7 +226,7 @@ para qualquer hospedeiro.
 cp .env.example .env
 ```
 
-Depois edite o `.env`. Estes cinco são o deploy inteiro:
+Depois edite o `.env`. Estes são o deploy inteiro:
 
 | Variável | O que pôr | Se errar |
 |---|---|---|
@@ -175,6 +236,7 @@ Depois edite o `.env`. Estes cinco são o deploy inteiro:
 | `VITE_API_URL` | `/api` | O app quebra em todo celular, sem erro no servidor |
 | `APP_DOMAIN` | o domínio do app | O Caddy não sobe |
 | `FRONTEND_URL` | `https://<seu domínio>`, sem barra no fim | O download da planilha falha por CORS |
+| `ERP_SYNC_KEY` | `python -c "import secrets; print(secrets.token_urlsafe(32))"`, a mesma do `sync\config.ini` | O faturamento e os brindes do ERP não entram (a sincronização volta 503) |
 
 As duas primeiras são checadas na largada: subir com as credenciais do
 `.env.example` derruba a API com o motivo na primeira linha do log. Isso é de
@@ -276,6 +338,9 @@ frontend/src/
     ├── promotor/    # ← migra como bloco para o ERP
     ├── vendedor/    # pedido sugerido, com o fator de giro por produto na linha
     └── admin/
+
+sync/                # roda no computador da empresa: lê o banco do ERP e manda
+                     # o faturamento e os brindes (sincronizar-faturamento-e-brindes.bat)
 ```
 
 **Regra de ouro:** toda lógica de coleta de estoque vive em `app/merchandising/` e

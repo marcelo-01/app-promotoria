@@ -13,7 +13,7 @@ anterior. Dentro dele:
     venda = estoque anterior + faturado + brinde − estoque atual − vencidos
 
 As três parcelas do meio são fatos conhecidos: as duas primeiras vêm das
-planilhas do ERP, a última vem da mão do promotor. O que sobra depois de
+notas do ERP, a última vem da mão do promotor. O que sobra depois de
 descontá-las é a única coisa que a contagem não explica de outro jeito —
 mercadoria que saiu pelo caixa.
 
@@ -79,8 +79,8 @@ class Cycle:
     cycle_days: int          # dias entre as duas
     previous_stock: float    # o que havia na contagem anterior
     current_stock: float     # o que há agora
-    invoiced: float          # entrou pela planilha de faturamento
-    gifted: float            # entrou pela planilha de brinde
+    invoiced: float          # entrou pelo faturamento do ERP
+    gifted: float            # entrou pelos brindes do ERP
     expired: float           # o promotor retirou por vencimento
     sold: float              # a venda do cliente no ciclo (nunca negativa)
 

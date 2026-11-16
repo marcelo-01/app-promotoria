@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # fornecedor simplesmente não aparece no PDF.
     company_name: str = ""
 
+    # Chave da sincronização com o ERP: o computador da empresa lê a cópia do
+    # banco do ERP e manda as notas de venda e de brinde assinadas com HMAC
+    # dela (`sync/sincronizar.py`, o mesmo esquema do BI Mais Vida e do EFFEX
+    # Trade). A mesma chave fica no `sync/config.ini` daquele computador e nunca
+    # trafega. Vazia, a rota de recebimento responde 503 e nada entra.
+    # Gere com: python -c "import secrets; print(secrets.token_urlsafe(32))"
+    erp_sync_key: str = ""
+
     @property
     def is_production(self) -> bool:
         return self.api_env == "production"

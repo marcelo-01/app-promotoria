@@ -180,7 +180,7 @@
           <q-input
             v-model="clienteForm.document" outlined dense clearable class="q-mt-md"
             label="CNPJ / CPF"
-            hint="É por ele que a planilha de faturamento encontra este cliente.
+            hint="É por ele que as notas do ERP encontram este cliente.
                   Em branco, as notas dele não entram no sistema."
             @keyup.enter="salvarCliente"
           >
@@ -209,8 +209,8 @@
           <q-input
             v-model="produtoForm.sku" outlined dense clearable
             label="Código no ERP"
-            hint="O COD. ITEM da planilha de faturamento (ex.: A21030). Em branco,
-                  as notas deste produto não entram no sistema."
+            hint="O código do item no ERP (ex.: A21030). Em branco, as notas
+                  deste produto não entram no sistema."
           >
             <template #prepend><q-icon name="qr_code_2" /></template>
           </q-input>

@@ -60,8 +60,11 @@ migrar dados", e não uma reescrita.
 A mudança central: **o app precisa do cadastro próprio de clientes e produtos**. No ERP,
 esses dados viriam do Firebird via o gateway de integração. Aqui, entram pelo
 **cadastro manual** feito pelo administrador, na tela de Cadastros. Não há importação
-de cadastros por planilha: a planilha do ERP que o app lê é a de faturamento, e ela
-só casa com clientes e produtos que já existem aqui.
+de cadastros: o que o app recebe do ERP são as notas de faturamento e de brinde, e
+elas só casam com clientes e produtos que já existem aqui. Até nov/2026 essas notas
+vinham em planilha anexada à mão; desde então chegam pela sincronização (`sync/`),
+que roda no computador da empresa, lê a cópia do banco do ERP (Firebird) e manda as
+notas para a API. O app continua sem Firebird: quem lê o banco é aquele computador.
 
 ### Stack — idêntica ao ERP
 
@@ -2467,8 +2470,8 @@ Sem ERP, alguém precisa cadastrar clientes e produtos — e aqui isso é feito 
 pelo administrador**, na tela de Cadastros. Não há importação de cadastros por planilha.
 
 A chave natural continua valendo (Âncora 4): `document` (CNPJ/CPF) para cliente e
-`sku` (código do item no ERP) para produto. É por esses dois campos que a planilha de
-faturamento encontra o cliente e o produto de cada linha — e é por eles que, no dia da
+`sku` (código do item no ERP) para produto. É por esses dois campos que as notas do
+ERP encontram o cliente e o produto de cada linha — e é por eles que, no dia da
 integração, os cadastros do ERP serão casados com os daqui para preencher `external_id`.
 
 ### Módulos `customers/` e `products/`

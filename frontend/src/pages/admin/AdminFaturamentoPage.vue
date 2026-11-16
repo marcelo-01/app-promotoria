@@ -1,30 +1,32 @@
 <!--
-  As planilhas do ERP: o que ENTROU em cada cliente.
+  O faturamento e os brindes do ERP: o que ENTROU em cada cliente.
 
   Esta é a metade da história que a contagem do promotor nunca viu. A diferença
   entre duas contagens é líquida — sem saber o que entrou, "o cliente vendeu 20"
   e "o cliente vendeu 40 e recebeu 20" são o mesmo número. Com as notas, a
   contagem deixa de ser a fonte dos lotes e vira a conferência deles.
 
-  A tela é deliberadamente em dois tempos. Anexar só LÊ e relata; nada vai para o
-  banco até alguém confirmar. Um arquivo errado anexado por engano não pode sujar
-  a base antes de um par de olhos passar por ele.
+  As notas chegam sozinhas: o computador da empresa lê a cópia do banco do ERP
+  e manda as dos últimos 120 dias (`sync/sincronizar-faturamento-e-brindes.bat`),
+  e cada envio troca as do período inteiro. Esta tela não grava nada — ela diz
+  se os números estão em dia e mostra o relato do último envio.
 
-  E o relatório trata o que não casou como TAREFA, não como erro: cada código
+  O relato trata o que não casou como TAREFA, não como erro: cada código
   desconhecido vem com quantas peças ficaram de fora, porque é esse número que
   diz se vale a pena cadastrar aquele item ou ignorá-lo.
 
-  São duas planilhas, e não duas telas: o fluxo é idêntico (anexar, conferir,
-  confirmar) e o relatório é o mesmo. Só muda o arquivo que o ERP gera e o que
-  cada um deixa de fora.
+  Até nov/2026 as notas vinham em planilhas anexadas aqui. O anexo saiu porque
+  os dois caminhos juntos contariam a mesma nota duas vezes: a coluna EMPRESA
+  da exportação vinha deslocada, e a chave da planilha não casa com a do banco.
 -->
 <template>
   <q-page class="q-pa-md">
-    <div class="text-h6">Planilhas do ERP</div>
+    <div class="text-h6">Faturamento e brindes do ERP</div>
     <div class="text-caption text-grey-7 q-mb-md">
       O que saiu para cada cliente, vendido ou de brinde. É por aqui que o sistema
       sabe o que entrou na loja — sem isso, ele só consegue adivinhar pela
-      variação do estoque.
+      variação do estoque. As notas chegam sozinhas do computador da empresa, que
+      lê a cópia do banco do ERP.
     </div>
 
     <q-btn-toggle
@@ -32,119 +34,57 @@
       toggle-color="primary" color="white" text-color="grey-8"
       class="seletor q-mb-md"
       :options="ORIGENS"
-      :disable="lendo || gravando"
-      @update:model-value="limpar"
+      :disable="carregando"
+      @update:model-value="carregar"
     />
 
-    <!-- ── Anexar ─────────────────────────────────────────────────────── -->
-    <q-card flat bordered class="q-mb-md">
-      <q-card-section class="row items-center q-col-gutter-md">
-        <div class="col-12 col-md">
-          <div class="text-caption text-grey-7 q-mb-sm">{{ origemAtual.ajuda }}</div>
-          <q-file
-            v-model="arquivo" outlined dense clearable
-            accept=".xlsx,.xlsm" :label="`${origemAtual.label} (.xlsx)`"
-            :disable="lendo || gravando"
-            @update:model-value="aoAnexar"
-            @rejected="aoRecusar"
-          >
-            <template #prepend><q-icon name="attach_file" /></template>
-          </q-file>
-        </div>
-        <div class="col-12 col-md-auto">
-          <q-btn
-            unelevated no-caps color="primary" icon="upload_file"
-            label="Conferir planilha"
-            :loading="lendo" :disable="!arquivo || gravando"
-            @click="conferir"
-          />
-        </div>
-      </q-card-section>
-
-      <!-- ── O que já entrou ───────────────────────────────────────────── -->
-      <q-separator />
-      <q-card-section class="q-pb-none">
-        <div class="row items-center no-wrap">
-          <div class="col text-subtitle2 text-weight-bold">
-            Planilhas de {{ origemAtual.label.toLowerCase() }} já importadas
-          </div>
-          <q-chip v-if="importadas.length" dense square color="positive" text-color="white">
-            {{ importadas.length }}
-          </q-chip>
-        </div>
-        <div class="text-caption text-grey-7">
-          Cada linha é um arquivo que entrou no sistema. Se a sua não está aqui,
-          ela ainda não foi importada.
-        </div>
-      </q-card-section>
-
-      <q-card-section v-if="carregandoImportadas && !importadas.length" class="text-caption text-grey-6">
+    <!-- ── Está em dia? ────────────────────────────────────────────────── -->
+    <q-card v-if="carregando && !carregado" flat bordered class="q-mb-md">
+      <q-card-section class="text-caption text-grey-6">
         <q-spinner-dots size="18px" color="primary" /> Buscando…
       </q-card-section>
-
-      <q-card-section v-else-if="!importadas.length" class="text-caption text-grey-6">
-        <q-icon name="inbox" /> Nenhuma planilha de
-        {{ origemAtual.label.toLowerCase() }} foi importada ainda.
-      </q-card-section>
-
-      <q-list v-else separator dense style="max-height: 320px; overflow-y: auto">
-        <q-item
-          v-for="(imp, i) in importadas" :key="imp.id"
-          :class="{ 'bg-green-1': i === 0 && recemImportada === imp.id }"
-        >
-          <q-item-section avatar>
-            <q-icon name="task" color="positive" />
-          </q-item-section>
-          <q-item-section>
-            <q-item-label class="text-weight-medium ellipsis">{{ imp.file_name }}</q-item-label>
-            <q-item-label caption>
-              {{ formatQuando(imp.imported_at) }}
-              <span v-if="imp.imported_by"> · por {{ imp.imported_by }}</span>
-              <span v-if="imp.first_day">
-                · período {{ formatDia(imp.first_day) }}<template
-                  v-if="imp.last_day !== imp.first_day"> a {{ formatDia(imp.last_day) }}</template>
-              </span>
-            </q-item-label>
-          </q-item-section>
-          <q-item-section side class="text-right">
-            <q-item-label class="text-weight-bold text-positive">
-              {{ imp.matched_lines }} linha(s)
-            </q-item-label>
-            <q-item-label caption>{{ formatQtd(imp.matched_quantity) }} pç</q-item-label>
-          </q-item-section>
-        </q-item>
-      </q-list>
-
-      <!-- Uma planilha de 25 MB leva minutos numa conexão fraca: sem o
-           progresso, a tela parece travada e alguém fecha no meio. -->
-      <q-inner-loading :showing="lendo || gravando">
-        <q-spinner-dots size="32px" color="primary" />
-        <div class="text-caption text-grey-8 q-mt-sm">{{ etapa }}</div>
-      </q-inner-loading>
     </q-card>
 
-    <!-- ── Arquivo não entendido ──────────────────────────────────────── -->
-    <q-banner v-if="relato?.missing_columns?.length" class="bg-red-1 rounded-borders q-mb-md">
-      <template #avatar><q-icon name="report" color="negative" /></template>
-      <div class="text-weight-bold">Esta planilha não tem as colunas esperadas.</div>
-      Faltou: {{ relato.missing_columns.join(', ') }}.
-      Confira se a exportação é a de faturamento por item.
+    <q-banner v-else-if="!ultima" class="bg-blue-1 rounded-borders q-mb-md">
+      <template #avatar><q-icon name="sync" color="primary" /></template>
+      <div class="text-weight-bold">
+        Nenhuma sincronização de {{ origemAtual.label.toLowerCase() }} chegou ainda.
+      </div>
+      No computador da empresa, dê dois cliques em
+      <b>sincronizar-faturamento-e-brindes.bat</b>, na pasta <b>sync</b> do
+      app-promotoria. Ele lê a cópia do banco do ERP e manda as notas de venda e
+      de brinde dos últimos 120 dias.
     </q-banner>
 
-    <template v-else-if="relato">
-      <!-- ── O resumo ─────────────────────────────────────────────────── -->
+    <q-banner
+      v-else
+      class="rounded-borders q-mb-md"
+      :class="atraso ? 'bg-orange-1' : 'bg-green-1'"
+    >
+      <template #avatar>
+        <q-icon
+          :name="atraso ? 'update' : 'cloud_done'"
+          :color="atraso ? 'orange-9' : 'positive'"
+        />
+      </template>
+      <div class="text-weight-bold">
+        Última sincronização em {{ formatQuando(ultima.imported_at) }}
+      </div>
+      <span v-if="ultima.copy_at">Cópia do banco do ERP de {{ formatQuando(ultima.copy_at) }} · </span>
+      notas de {{ formatDia(ultima.first_day) }} a {{ formatDia(ultima.last_day) }}.
+      <div v-if="atraso" class="q-mt-xs">
+        As notas mais recentes que chegaram são de {{ formatDia(ultima.last_day) }},
+        há {{ atraso }} dias. Rode o <b>sincronizar-faturamento-e-brindes.bat</b>
+        no computador da empresa, com a cópia do banco do dia.
+      </div>
+    </q-banner>
+
+    <!-- ── O relato do último envio ──────────────────────────────────────── -->
+    <template v-if="relato">
       <q-card flat bordered class="q-mb-md">
         <q-card-section>
-          <div class="row items-center justify-between q-mb-sm">
-            <div class="text-subtitle1 text-weight-bold">
-              {{ relato.saved ? 'Importado' : 'Prévia — nada foi gravado ainda' }}
-            </div>
-            <q-chip
-              dense square :color="relato.saved ? 'positive' : 'orange-9'" text-color="white"
-              :icon="relato.saved ? 'check_circle' : 'visibility'"
-            >
-              {{ relato.saved ? 'gravado' : 'só leitura' }}
-            </q-chip>
+          <div class="text-subtitle1 text-weight-bold q-mb-sm">
+            O que entrou no último envio
           </div>
 
           <div class="row q-col-gutter-md">
@@ -154,58 +94,43 @@
             </div>
           </div>
 
-          <q-banner v-if="descartePorPeso" dense class="bg-orange-1 rounded-borders q-mt-md">
-            <template #avatar><q-icon name="scale" color="orange-9" /></template>
-            <b>{{ descartePorPeso }} linha(s) não puderam ser contadas em peças.</b>
-            A planilha de brindes traz a quantidade na unidade de faturamento, e
-            nessas linhas ela é peso (queijo e manteiga a granel são vendidos por
-            quilo). Virar "32,75 peças" de um queijo de 4&nbsp;kg inflaria a
-            entrada em oito vezes, então elas ficam de fora. A correção é pedir a
-            coluna de peças também nesta exportação.
-          </q-banner>
-
-          <div v-if="relato.first_day" class="text-caption text-grey-7 q-mt-md">
-            Período da planilha: {{ formatDia(relato.first_day) }}
-            <span v-if="relato.last_day !== relato.first_day">
-              a {{ formatDia(relato.last_day) }}
+          <div class="text-caption text-grey-7 q-mt-md">
+            {{ formatQtd(relato.matched_customers) }} cliente(s) deste app receberam
+            mercadoria no período. O envio trocou as
+            {{ formatQtd(relato.previous_lines) }} entrada(s) que havia de
+            {{ formatDia(relato.first_day) }} a {{ formatDia(relato.last_day) }}.
+            <span v-if="relato.ignored_cfop">
+              {{ formatQtd(relato.ignored_cfop) }} item(ns) ficaram de fora pelo
+              CFOP ({{ origemAtual.cfop }}).
             </span>
-            · {{ relato.ignored_cfop }} linha(s) ficaram de fora pelo CFOP.
+            <span v-if="relato.ignored_incomplete">
+              {{ formatQtd(relato.ignored_incomplete) }} sem a contagem de peças.
+            </span>
           </div>
 
-          <!-- Sem nenhuma linha casada o botão de importar fica cinza — e um
-               botão cinza sem explicação parece defeito. O motivo tem de estar
-               aqui, ao lado dele, e não no fim da página. -->
+          <!-- Sem nenhuma linha casada não há o que contar — e um zero sem
+               explicação parece defeito. O motivo tem de estar aqui. -->
           <q-banner
-            v-if="!relato.saved && !relato.matched_lines && relato.usable_lines"
+            v-if="!relato.matched_lines && relato.usable_lines"
             class="bg-orange-1 rounded-borders q-mt-md"
           >
             <template #avatar><q-icon name="link_off" color="orange-9" /></template>
             <div class="text-weight-bold">
-              Nenhuma linha casou com o cadastro — por isso não há o que importar.
+              Nenhum item casou com o cadastro — por isso nada entrou.
             </div>
-            A planilha identifica o produto pelo <b>código do ERP</b> e o cliente
-            pelo <b>CNPJ</b>, e o sistema só aproveita a linha quando encontra os
+            As notas identificam o produto pelo <b>código do ERP</b> e o cliente
+            pelo <b>CNPJ</b>, e o sistema só aproveita o item quando encontra os
             dois no cadastro. Preencha o código no produto e o CNPJ no cliente
-            (as listas abaixo dizem quais faltam, a começar pelos que mais
-            pesam) e anexe a planilha de novo.
+            (as listas abaixo dizem quais faltam, a começar pelos que mais pesam);
+            o próximo envio já os traz.
             <template #action>
               <q-btn flat no-caps label="Ir para Cadastros" :to="{ name: 'AdminCadastros' }" />
             </template>
           </q-banner>
         </q-card-section>
-
-        <q-card-actions v-if="!relato.saved" align="right" class="q-pa-md q-pt-none">
-          <q-btn flat no-caps label="Descartar" color="grey-8" @click="limpar" />
-          <q-btn
-            unelevated no-caps color="positive" icon="save"
-            :label="`Importar ${relato.matched_lines} linha(s)`"
-            :loading="gravando" :disable="!relato.matched_lines"
-            @click="importar"
-          />
-        </q-card-actions>
       </q-card>
 
-      <!-- ── O que entrou, por motivo (só a planilha de brindes traz) ──── -->
+      <!-- ── O que entrou, por motivo (só os brindes trazem) ─────────────── -->
       <q-card v-if="relato.by_reason?.length" flat bordered class="q-mb-md">
         <q-card-section class="q-pb-none">
           <div class="text-subtitle2 text-weight-bold">Brindes por motivo</div>
@@ -223,34 +148,37 @@
               <q-item-label class="text-weight-bold text-primary">
                 {{ formatQtd(m.quantity) }} pç
               </q-item-label>
-              <q-item-label caption>{{ m.lines }} linha(s)</q-item-label>
+              <q-item-label caption>{{ m.lines }} item(ns)</q-item-label>
             </q-item-section>
           </q-item>
         </q-list>
       </q-card>
 
       <!-- ── O que ficou de fora ──────────────────────────────────────── -->
-      <div class="row q-col-gutter-md">
+      <div class="row q-col-gutter-md q-mb-md">
         <div v-for="lista in pendencias" :key="lista.titulo" class="col-12 col-md-6">
           <q-card flat bordered>
             <q-card-section class="q-pb-none">
               <div class="row items-center no-wrap">
                 <div class="col text-subtitle2 text-weight-bold">{{ lista.titulo }}</div>
-                <q-chip v-if="lista.itens.length" dense square color="orange-9" text-color="white">
-                  {{ lista.itens.length }}
+                <q-chip v-if="lista.total" dense square color="orange-9" text-color="white">
+                  {{ formatQtd(lista.total) }}
                 </q-chip>
               </div>
               <div class="text-caption text-grey-7">{{ lista.ajuda }}</div>
+              <div v-if="lista.total > lista.itens.length" class="text-caption text-grey-7">
+                Mostrando os {{ lista.itens.length }} com mais itens.
+              </div>
             </q-card-section>
 
-            <q-card-section v-if="!lista.itens.length" class="text-caption text-positive">
+            <q-card-section v-if="!lista.total" class="text-caption text-positive">
               <q-icon name="check_circle" /> Tudo casou com o cadastro.
             </q-card-section>
 
             <q-list v-else separator dense style="max-height: 340px; overflow-y: auto">
               <q-item v-for="item in lista.itens" :key="item.code">
                 <q-item-section>
-                  <q-item-label class="text-weight-medium">{{ item.name }}</q-item-label>
+                  <q-item-label class="text-weight-medium quebra">{{ item.name }}</q-item-label>
                   <q-item-label caption>
                     {{ lista.rotulo }} {{ item.code }}
                     <span v-if="item.document"> · CNPJ {{ formatDoc(item.document) }}</span>
@@ -260,7 +188,7 @@
                   <q-item-label class="text-weight-bold text-orange-9">
                     {{ formatQtd(item.quantity) }} pç
                   </q-item-label>
-                  <q-item-label caption>{{ item.lines }} linha(s)</q-item-label>
+                  <q-item-label caption>{{ item.lines }} item(ns)</q-item-label>
                 </q-item-section>
               </q-item>
             </q-list>
@@ -268,18 +196,73 @@
         </div>
       </div>
 
-      <!-- Quando nada casou, o aviso já está em cima, ao lado do botão. -->
-      <q-banner v-if="temPendencia && relato.matched_lines" class="bg-blue-1 rounded-borders q-mt-md">
+      <!-- Quando nada casou, o aviso já está em cima, junto dos números. -->
+      <q-banner v-if="temPendencia && relato.matched_lines" class="bg-blue-1 rounded-borders q-mb-md">
         <template #avatar><q-icon name="lightbulb" color="primary" /></template>
         Para trazer esses itens, preencha o <b>código do ERP</b> no cadastro do
-        produto e o <b>CNPJ</b> no cadastro do cliente, e anexe a planilha de
-        novo. Reanexar não duplica nada — cada linha é identificada pelo número
-        da venda.
+        produto e o <b>CNPJ</b> no cadastro do cliente. O próximo envio já os
+        traz — cada um troca as notas do período inteiro, sem duplicar nada.
         <template #action>
           <q-btn flat no-caps label="Ir para Cadastros" :to="{ name: 'AdminCadastros' }" />
         </template>
       </q-banner>
     </template>
+
+    <!-- ── O que já chegou ─────────────────────────────────────────────── -->
+    <q-card flat bordered>
+      <q-card-section class="q-pb-none">
+        <div class="row items-center no-wrap">
+          <div class="col text-subtitle2 text-weight-bold">
+            Envios de {{ origemAtual.label.toLowerCase() }} recebidos
+          </div>
+          <q-chip v-if="recebidos.length" dense square color="positive" text-color="white">
+            {{ recebidos.length }}
+          </q-chip>
+        </div>
+        <div class="text-caption text-grey-7">
+          Cada linha é um envio que entrou no sistema, do mais recente para o mais
+          antigo — e, antes da sincronização, as planilhas anexadas à mão.
+        </div>
+      </q-card-section>
+
+      <q-card-section v-if="!recebidos.length" class="text-caption text-grey-6">
+        <q-icon name="inbox" /> Nada de {{ origemAtual.label.toLowerCase() }} chegou ainda.
+      </q-card-section>
+
+      <q-list v-else separator dense style="max-height: 320px; overflow-y: auto">
+        <q-item v-for="imp in recebidos" :key="imp.id">
+          <q-item-section avatar>
+            <q-icon
+              :name="imp.source === 'erp' ? 'sync' : 'description'"
+              :color="imp.source === 'erp' ? 'positive' : 'grey-7'"
+            />
+          </q-item-section>
+          <q-item-section>
+            <q-item-label class="text-weight-medium quebra">
+              <template v-if="imp.source === 'erp'">
+                Sincronização<span v-if="imp.copy_at">
+                  · cópia do banco de {{ formatQuando(imp.copy_at) }}</span>
+              </template>
+              <template v-else>{{ imp.file_name }}</template>
+            </q-item-label>
+            <q-item-label caption>
+              {{ formatQuando(imp.imported_at) }}
+              <span v-if="imp.imported_by"> · por {{ imp.imported_by }}</span>
+              <span v-if="imp.first_day">
+                · notas de {{ formatDia(imp.first_day) }}<template
+                  v-if="imp.last_day !== imp.first_day"> a {{ formatDia(imp.last_day) }}</template>
+              </span>
+            </q-item-label>
+          </q-item-section>
+          <q-item-section side class="text-right">
+            <q-item-label class="text-weight-bold text-positive">
+              {{ formatQtd(imp.matched_lines) }} item(ns)
+            </q-item-label>
+            <q-item-label caption>{{ formatQtd(imp.matched_quantity) }} pç</q-item-label>
+          </q-item-section>
+        </q-item>
+      </q-list>
+    </q-card>
   </q-page>
 </template>
 
@@ -291,54 +274,35 @@ import { merchandisingApi } from '@/api/merchandising'
 const $q = useQuasar()
 
 const ORIGENS = [
-  {
-    value: 'venda',
-    label: 'Faturamento',
-    ajuda: 'A exportação de vendas por item. Entram as saídas de mercadoria; '
-      + 'devolução fica de fora — ela só é lançada no ERP quando a mercadoria '
-      + 'volta ao estoque, dias depois.',
-  },
-  {
-    value: 'brinde',
-    label: 'Brindes',
-    ajuda: 'A exportação de brindes. Entram só as remessas ao cliente (CFOP 5910 '
-      + 'e 6910); transferência entre filiais, retorno, consumo interno e baixa '
-      + 'por perda ficam de fora, porque não põem mercadoria em loja nenhuma.',
-  },
+  { value: 'venda', label: 'Faturamento', cfop: 'só saída, 5xxx e 6xxx' },
+  { value: 'brinde', label: 'Brindes', cfop: 'só remessa ao cliente, 5910 e 6910' },
 ]
 
-const origem = ref('venda')
-const arquivo = ref(null)
-const relato = ref(null)
-const lendo = ref(false)
-const gravando = ref(false)
-// Quanto do arquivo já subiu — `null` fora do envio.
-const progresso = ref(null)
+// Notas mais velhas que isto avisam que a sincronização parou. Na segunda de
+// manhã a cópia costuma trazer até o sábado: dois dias, sem alarme.
+const DIAS_ATRASO = 3
 
-// As planilhas desta origem que já entraram — o que responde "essa eu já
-// mandei?" sem precisar anexar de novo para descobrir.
-const importadas = ref([])
-const carregandoImportadas = ref(false)
-// A que acabou de entrar nesta sessão, para destacar na lista.
-const recemImportada = ref(null)
+const origem = ref('venda')
+const ultima = ref(null)
+const recebidos = ref([])
+const carregando = ref(false)
+const carregado = ref(false)
 
 const origemAtual = computed(
   () => ORIGENS.find((o) => o.value === origem.value) || ORIGENS[0]
 )
 
-const formatMb = (bytes) =>
-  (bytes / 1024 / 1024).toLocaleString('pt-BR', { maximumFractionDigits: 1 })
+const relato = computed(() => ultima.value?.report || null)
 
-/** O que dizer enquanto se espera: subindo o arquivo, ou o servidor lendo. */
-const etapa = computed(() => {
-  const p = progresso.value
-  if (p && p.loaded < p.total) {
-    return `Enviando… ${formatMb(p.loaded)} de ${formatMb(p.total)} MB`
-  }
-  return gravando.value ? 'Gravando as entradas…' : 'Lendo a planilha…'
+/** Dias desde as notas mais recentes que chegaram; 0 = em dia. */
+const atraso = computed(() => {
+  const ate = ultima.value?.last_day
+  if (!ate) return 0
+  const hoje = new Date()
+  hoje.setHours(0, 0, 0, 0)
+  const dias = Math.round((hoje - new Date(`${ate}T00:00:00`)) / 86400000)
+  return dias > DIAS_ATRASO ? dias : 0
 })
-
-const aoProgredir = (p) => { progresso.value = p }
 
 const formatQtd = (v) =>
   Number(v || 0).toLocaleString('pt-BR', { maximumFractionDigits: 3 })
@@ -366,126 +330,66 @@ function formatDoc(digitos) {
 const numeros = computed(() => {
   const r = relato.value
   if (!r) return []
+  const fora = r.usable_lines - r.matched_lines
   return [
-    { label: 'linhas na planilha', valor: r.total_lines, cor: 'text-grey-8' },
+    { label: 'itens nas notas do período', valor: formatQtd(r.total_lines), cor: 'text-grey-8' },
     {
       label: 'entraram no sistema',
-      valor: r.matched_lines,
+      valor: formatQtd(r.matched_lines),
       cor: r.matched_lines ? 'text-positive' : 'text-grey-6',
     },
     {
-      label: 'sem cadastro',
-      valor: r.usable_lines - r.matched_lines,
-      cor: r.usable_lines - r.matched_lines ? 'text-orange-9' : 'text-grey-6',
+      // A maioria é cliente do ERP que os promotores não atendem: o pacote traz
+      // as notas de todos, e o casamento separa as das lojas daqui.
+      label: 'de clientes ou produtos fora do app',
+      valor: formatQtd(fora),
+      cor: 'text-grey-7',
     },
     { label: 'peças contabilizadas', valor: formatQtd(r.matched_quantity), cor: 'text-primary' },
   ]
 })
 
-/** A planilha de brindes não traz contagem de peças — só quantidade na unidade
- *  de faturamento, que mistura unidades e quilos. Linha fracionada é peso, e é
- *  descartada em vez de virar peça inventada. */
-const descartePorPeso = computed(() => relato.value?.ignored_weight || 0)
-
 const pendencias = computed(() => [
   {
     titulo: 'Produtos sem cadastro',
-    ajuda: 'Códigos que a planilha traz e este app não conhece.',
+    ajuda: 'Códigos que o ERP traz e este app não conhece.',
     rotulo: 'código',
     itens: relato.value?.unknown_products || [],
+    total: relato.value?.unknown_products_total || 0,
   },
   {
     titulo: 'Clientes sem cadastro',
-    ajuda: 'CNPJ da planilha sem cliente correspondente aqui.',
+    ajuda: 'CNPJ do ERP sem cliente correspondente aqui. Vem todo cliente que '
+      + 'comprou no período; os que os promotores atendem precisam do CNPJ no cadastro.',
     rotulo: 'cliente',
     itens: relato.value?.unknown_customers || [],
+    total: relato.value?.unknown_customers_total || 0,
   },
 ])
 
-const temPendencia = computed(() =>
-  pendencias.value.some((lista) => lista.itens.length > 0)
-)
+const temPendencia = computed(() => pendencias.value.some((lista) => lista.total > 0))
 
-/** Anexar já confere: o passo separado não acrescenta nada e esconde o resultado
- *  atrás de mais um clique. */
-function aoAnexar(file) {
-  relato.value = null
-  if (file) conferir()
-}
-
-/** O campo só aceita .xlsx e, sem isto, recusa qualquer outro arquivo em
- *  silêncio: o administrador escolhe o .xls que o ERP exportou, nada acontece,
- *  e parece que a tela travou. */
-function aoRecusar(recusados) {
-  const nome = recusados?.[0]?.file?.name || 'Esse arquivo'
-  $q.notify({
-    type: 'warning',
-    timeout: 8000,
-    message: `${nome} não é .xlsx. Se o ERP exportou em .xls, abra no Excel e `
-      + 'salve como "Pasta de Trabalho do Excel (.xlsx)" antes de anexar.',
-  })
-}
-
-function limpar() {
-  arquivo.value = null
-  relato.value = null
-  carregarImportadas()
-}
-
-/** A lista de baixo é por origem: trocar de aba troca a lista. */
-async function carregarImportadas() {
-  carregandoImportadas.value = true
+/** As duas consultas são por origem: trocar de aba troca tudo. */
+async function carregar() {
+  carregando.value = true
   try {
-    importadas.value = await merchandisingApi.listInvoiceImports(origem.value)
+    const [ultimo, lista] = await Promise.all([
+      merchandisingApi.latestErpImport(origem.value),
+      merchandisingApi.listInvoiceImports(origem.value),
+    ])
+    ultima.value = ultimo
+    recebidos.value = lista
   } catch {
-    importadas.value = []
-    $q.notify({ type: 'negative', message: 'Não foi possível listar as planilhas importadas.' })
+    ultima.value = null
+    recebidos.value = []
+    $q.notify({ type: 'negative', message: 'Não foi possível buscar os envios do ERP.' })
   } finally {
-    carregandoImportadas.value = false
+    carregando.value = false
+    carregado.value = true
   }
 }
 
-onMounted(carregarImportadas)
-
-async function conferir() {
-  if (!arquivo.value) return
-  lendo.value = true
-  progresso.value = null
-  try {
-    relato.value = await merchandisingApi.previewInvoices(
-      arquivo.value, origem.value, aoProgredir
-    )
-  } catch (error) {
-    relato.value = null
-    $q.notify({ type: 'negative', message: error.message, timeout: 8000 })
-  } finally {
-    lendo.value = false
-    progresso.value = null
-  }
-}
-
-async function importar() {
-  gravando.value = true
-  progresso.value = null
-  try {
-    relato.value = await merchandisingApi.importInvoices(
-      arquivo.value, origem.value, aoProgredir
-    )
-    $q.notify({
-      type: 'positive',
-      message: `${relato.value.matched_lines} linha(s) importada(s).`,
-      position: 'top',
-    })
-    // O recibo entra na lista de baixo: é ele que prova que a planilha entrou.
-    await carregarImportadas()
-    recemImportada.value = importadas.value[0]?.id || null
-  } catch (error) {
-    $q.notify({ type: 'negative', message: error.message, timeout: 8000 })
-  } finally {
-    gravando.value = false
-    progresso.value = null
-  }
-}
+onMounted(carregar)
 </script>
 
 <style scoped>
@@ -500,5 +404,11 @@ async function importar() {
   font-size: 1.8rem;
   font-weight: 800;
   line-height: 1.1;
+}
+
+/* Nome de cliente e de produto não se corta: quebra linha */
+.quebra {
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 </style>

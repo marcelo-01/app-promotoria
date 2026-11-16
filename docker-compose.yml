@@ -37,6 +37,9 @@ services:
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES}
       REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS}
       FRONTEND_URL: ${FRONTEND_URL}
+      # Para testar a sincronização com o ERP no computador: a mesma chave do
+      # sync/config.ini, com destino = http://localhost:8002 lá.
+      ERP_SYNC_KEY: ${ERP_SYNC_KEY:-}
     ports:
       - "8002:8000"          # 8001 é do ERP
     volumes:

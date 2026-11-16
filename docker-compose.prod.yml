@@ -64,6 +64,9 @@ services:
       FRONTEND_URL: ${FRONTEND_URL}
       TIMEZONE: ${TIMEZONE:-America/Sao_Paulo}
       COMPANY_NAME: ${COMPANY_NAME:-}
+      # Chave da sincronização do faturamento e dos brindes com o ERP (`sync/`).
+      # Vazia, a rota de recebimento responde 503 e nada entra.
+      ERP_SYNC_KEY: ${ERP_SYNC_KEY:-}
     volumes:
       # Fotos dos produtos. Sem este volume, um redeploy com --build apagaria
       # todas as fotos junto com a imagem antiga do contêiner.

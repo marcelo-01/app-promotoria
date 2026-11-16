@@ -1,0 +1,3 @@
+# O cmd.exe lê o .bat linha a linha e se perde com fim de linha LF (rótulo e
+# goto quebram): sempre CRLF, qualquer que seja o core.autocrlf de quem clonar.
+*.bat text eol=crlf

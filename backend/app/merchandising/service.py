@@ -12,18 +12,20 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.customers.service import CustomersService
 from app.infrastructure.persistence.models.delivery import (
-    DeliveryKind, InvoiceImport, ProductDelivery, ProductRemoval,
+    DeliveryKind, ImportSource, InvoiceImport, ProductRemoval,
 )
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
 from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus, UnitType, VisitType,
 )
 from app.infrastructure.persistence.models.user import User, UserRole
-from app.merchandising import consolidation, evolution, expiry, invoices, orders
+from app.merchandising import (
+    consolidation, erp_sync, evolution, expiry, invoices, orders,
+)
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    CountProductResponse, CountSheetResponse, InvoiceImportRecordResponse,
-    InvoiceImportResponse,
+    CountProductResponse, CountSheetResponse, ErpSyncPackage, ErpSyncResponse,
+    InvoiceImportRecordResponse, InvoiceImportResponse,
     ExpiryLotResponse, MovedProductResponse, OrderSuggestionItemResponse,
     OrderSuggestionResponse,
     ProductExpiryInput, ProductExpiryResponse,
@@ -50,8 +52,8 @@ class _ExpiryInput:
     """
 
     previous_stock: float    # o total do par naquele dia
-    invoiced: float          # entrou pela planilha de faturamento
-    gifted: float            # entrou pela planilha de brinde
+    invoiced: float          # entrou pelo faturamento do ERP
+    gifted: float            # entrou pelos brindes do ERP
     removed: float           # o promotor retirou por vencimento
 
 
@@ -71,6 +73,156 @@ def _side_response(visit) -> VisitPairSideResponse:
         no_products=bool(visit.no_products),
         items_count=visit.items_count,
         visited_at=visit.visited_at,
+    )
+
+
+# ── Faturamento e brindes do ERP ──────────────────────────────────────────
+
+# Quantos itens de cada lista do relato ficam guardados. A de clientes traz todo
+# cliente do ERP que comprou no período e não é atendido aqui — milhares —, e o
+# que importa nela são os maiores.
+_LISTA_MAX = 100
+
+# Com menos entradas que isto no período, o freio do envio que apaga demais não
+# vale: é o começo, ou um teste.
+_FREIO_MINIMO = 100
+
+_ORIGEM = {
+    DeliveryKind.VENDA.value: "o faturamento",
+    DeliveryKind.BRINDE.value: "os brindes",
+}
+
+
+def _casar_pacote(
+    package: ErpSyncPackage, produtos: dict[str, UUID], clientes: dict[str, UUID],
+) -> dict[str, tuple[InvoiceImportResponse, list[dict]]]:
+    """Cada origem que veio no pacote, casada com o cadastro. CPU pura."""
+    clientes_erp = {c.erp_id: c for c in package.customers}
+    produtos_erp = {p.erp_id: p for p in package.products}
+    casados = {}
+    for kind, notas in (
+        (DeliveryKind.VENDA.value, package.sales),
+        (DeliveryKind.BRINDE.value, package.gifts),
+    ):
+        if notas is None:
+            continue
+        lido = invoices.from_package(
+            notas, clientes_erp, produtos_erp, kind, package.first_day, package.last_day
+        )
+        casados[kind] = _casar(lido, kind, produtos, clientes)
+    return casados
+
+
+def _casar(
+    lido: invoices.Parsed, kind: str,
+    produtos: dict[str, UUID], clientes: dict[str, UUID],
+) -> tuple[InvoiceImportResponse, list[dict]]:
+    """Linhas limpas → as entradas a gravar e o relato do que ficou de fora.
+
+    O cliente casa pelo CNPJ e o produto pelo código do ERP. O mesmo produto
+    pode vir em dois itens da mesma nota (dois CFOPs, por exemplo): eles somam
+    numa entrada só, porque a chave é única no banco e o que importa é quanto
+    chegou.
+    """
+    entradas: dict[tuple, dict] = {}
+    casadas = 0
+    # código → [nome, linhas, quantidade, documento] do que ficou de fora
+    sem_produto: dict[str, list] = {}
+    sem_cliente: dict[str, list] = {}
+    # motivo → o mesmo, do que ENTROU (só o brinde traz motivo)
+    motivos: dict[str, list] = {}
+
+    for linha in lido.rows:
+        product_id = produtos.get(linha.product_code)
+        customer_id = clientes.get(linha.customer_document)
+
+        if product_id is None:
+            falta = sem_produto.setdefault(
+                linha.product_code, [linha.product_name, 0, 0.0, None]
+            )
+            falta[1] += 1
+            falta[2] += linha.quantity
+        if customer_id is None:
+            falta = sem_cliente.setdefault(
+                linha.customer_code,
+                [linha.customer_name, 0, 0.0, linha.customer_document or None],
+            )
+            falta[1] += 1
+            falta[2] += linha.quantity
+        if product_id is None or customer_id is None:
+            continue
+
+        if linha.reason:
+            conta = motivos.setdefault(linha.reason, [linha.reason, 0, 0.0, None])
+            conta[1] += 1
+            conta[2] += linha.quantity
+
+        casadas += 1
+        chave = (linha.company, linha.sale_number, product_id)
+        repetida = entradas.get(chave)
+        if repetida is not None:
+            repetida["quantity"] += Decimal(str(linha.quantity))
+            continue
+        entradas[chave] = {
+            "id": uuid4(),
+            "customer_id": customer_id,
+            "product_id": product_id,
+            "issued_on": linha.issued_on,
+            "quantity": Decimal(str(linha.quantity)),
+            "company": linha.company[:120],
+            "sale_number": linha.sale_number[:40],
+            "invoice": linha.invoice[:40] if linha.invoice else None,
+            "cfop": linha.cfop[:10] or None,
+        }
+
+    desconhecidos = lambda faltas: sorted(  # noqa: E731
+        (
+            UnknownKeyResponse(
+                code=codigo, name=nome or "—", document=documento,
+                lines=linhas, quantity=Decimal(str(round(quanto, 3))),
+            )
+            for codigo, (nome, linhas, quanto, documento) in faltas.items()
+        ),
+        key=lambda u: -u.lines,
+    )
+
+    relato = InvoiceImportResponse(
+        kind=kind,
+        total_lines=lido.total,
+        usable_lines=len(lido.rows),
+        ignored_cfop=lido.ignored_cfop,
+        ignored_incomplete=lido.ignored_incomplete,
+        first_day=lido.first_day,
+        last_day=lido.last_day,
+        matched_lines=casadas,
+        matched_quantity=sum((e["quantity"] for e in entradas.values()), Decimal(0)),
+        matched_customers=len({e["customer_id"] for e in entradas.values()}),
+        unknown_customers=desconhecidos(sem_cliente)[:_LISTA_MAX],
+        unknown_customers_total=len(sem_cliente),
+        unknown_products=desconhecidos(sem_produto)[:_LISTA_MAX],
+        unknown_products_total=len(sem_produto),
+        by_reason=desconhecidos(motivos),
+    )
+    return relato, list(entradas.values())
+
+
+def _record_response(
+    recibo: InvoiceImport, nome: Optional[str],
+) -> InvoiceImportRecordResponse:
+    """Recibo → a linha da lista, sem o relato."""
+    return InvoiceImportRecordResponse(
+        id=recibo.id,
+        kind=recibo.kind,
+        source=recibo.source or ImportSource.PLANILHA.value,
+        file_name=recibo.file_name,
+        imported_at=recibo.created_at,
+        imported_by=nome,
+        copy_at=recibo.copy_at,
+        first_day=recibo.first_day,
+        last_day=recibo.last_day,
+        total_lines=recibo.total_lines,
+        matched_lines=recibo.matched_lines,
+        matched_quantity=recibo.matched_quantity,
     )
 
 
@@ -194,7 +346,7 @@ class MerchandisingService:
         — ela está sendo digitada.
 
         Daí a divisão: o servidor manda daqui o que só ele sabe (o estoque do
-        último dia completo, o que as planilhas do ERP registraram desde então, o
+        último dia completo, o que as notas do ERP registraram desde então, o
         vencido já retirado) e o veredito é fechado em `lib/vencimento.js`, no fim
         da contagem, sem depender de rede. A regra é a de `expiry.py`.
 
@@ -409,173 +561,130 @@ class MerchandisingService:
         customer = await CustomersService.get(session, tenant_id, customer_id)
         return sugestao, customer
 
-    # ── Planilha de faturamento ───────────────────────────────────────────
+    # ── Faturamento e brindes do ERP ──────────────────────────────────────
 
     @staticmethod
-    async def import_invoices(
-        session: AsyncSession, tenant_id: UUID, content: bytes, save: bool,
-        kind: str = DeliveryKind.VENDA.value,
-        file_name: str = "", user: Optional[User] = None,
-    ) -> InvoiceImportResponse:
-        """Lê uma das planilhas do ERP e grava as entradas de mercadoria.
+    async def receive_erp_sync(
+        session: AsyncSession, package: ErpSyncPackage, sent_at: datetime,
+    ) -> ErpSyncResponse:
+        """Grava as entradas de mercadoria que vieram do banco do ERP.
 
-        `save=False` é a prévia: lê, casa com o cadastro e relata, sem tocar no
-        banco. É o modo em que a tela abre — anexar um arquivo errado não pode
-        sujar a base antes de alguém olhar.
-
-        Quando grava, deixa também o recibo (`InvoiceImport`): as linhas não
-        sabem de que arquivo vieram, e é o recibo que permite à tela dizer
-        "esta planilha já entrou" no dia seguinte.
+        O pacote chega já assinado e conferido (`erp_sync.ler_pacote`): notas de
+        venda e de brinde de um período, mandadas pelo computador da empresa.
+        Para cada origem que veio, as entradas do período inteiro são trocadas
+        pelas do pacote — a nota cancelada ou corrigida no ERP some ou muda aqui
+        no envio seguinte — e fica um recibo com o relato, que a tela mostra.
 
         LINHA QUE NÃO CASA NÃO É ERRO, É TAREFA
         ---------------------------------------
-        Produto ou cliente que a planilha traz e o cadastro não conhece sai na
-        resposta com quanto ficou de fora. O administrador vincula o código e
-        anexa de novo — a importação é idempotente pela chave da venda, então
-        reanexar o mesmo arquivo não duplica o que já entrou.
+        Produto ou cliente que o ERP traz e o cadastro não conhece sai no relato
+        com quanto ficou de fora. O administrador preenche o código no produto
+        ou o CNPJ no cliente, e o envio seguinte já os traz.
+
+        Antes de gravar qualquer coisa, dois freios: o pacote não pode ser mais
+        velho que o último aceito (reenvio), e não pode deixar o período com
+        menos da metade das entradas que ele tem hoje — sinal de cópia do banco
+        incompleta, que apagaria meses de entrada de uma vez. Este último cede
+        com `force`, que o `sincronizar.py --forcar` liga.
         """
-        # Fora do event loop: são segundos de CPU num arquivo grande, e com um
-        # processo só a API inteira (a contagem do promotor, o login) ficaria
-        # parada esperando a leitura acabar.
-        try:
-            lido = await asyncio.to_thread(invoices.parse, content, kind)
-        except invoices.UnreadableWorkbook as erro:
-            raise HTTPException(status_code=422, detail=str(erro))
-        if lido.missing_columns:
-            return InvoiceImportResponse(
-                kind=kind, missing_columns=lido.missing_columns
+        tenant_id = await Repo.single_active_tenant_id(session)
+        if tenant_id is None:
+            raise erp_sync.Recusado(
+                503, "SEM_EMPRESA",
+                "O servidor precisa de exatamente uma empresa (tenant) ativa para "
+                "receber a sincronização.",
+            )
+
+        ultimo = await Repo.last_erp_sent_at(session, tenant_id)
+        if ultimo is not None and sent_at <= ultimo:
+            raise erp_sync.Recusado(
+                409, "REENVIO",
+                "Este pacote é igual ou mais antigo que o último recebido. Rode a "
+                "sincronização de novo.",
             )
 
         produtos = await Repo.products_by_sku(session, tenant_id)
         clientes = await Repo.customers_by_document(session, tenant_id)
+        # Fora do event loop: são 100 mil itens para casar, e com um processo só
+        # a API inteira (a contagem do promotor, o login) ficaria esperando.
+        casados = await asyncio.to_thread(_casar_pacote, package, produtos, clientes)
 
-        # Chave natural → entrada. A mesma venda pode trazer o mesmo item em
-        # duas linhas (dois lotes, por exemplo): elas somam numa entrada só,
-        # porque a chave é única no banco e o que importa é quanto chegou.
-        entradas: dict[tuple, ProductDelivery] = {}
-        casadas = 0
-        # código → (nome, linhas, quantidade) do que ficou de fora
-        sem_produto: dict[str, list] = {}
-        sem_cliente: dict[str, list] = {}
-        # motivo → o mesmo, do que ENTROU (a planilha de brindes traz motivo)
-        motivos: dict[str, list] = {}
-
-        for linha in lido.rows:
-            product_id = produtos.get(linha.product_code)
-            customer_id = clientes.get(linha.customer_document)
-
-            if product_id is None:
-                falta = sem_produto.setdefault(
-                    linha.product_code, [linha.product_name, 0, 0.0, None]
-                )
-                falta[1] += 1
-                falta[2] += linha.quantity
-            if customer_id is None:
-                falta = sem_cliente.setdefault(
-                    linha.customer_code,
-                    [linha.customer_name, 0, 0.0, linha.customer_document],
-                )
-                falta[1] += 1
-                falta[2] += linha.quantity
-            if product_id is None or customer_id is None:
-                continue
-
-            if linha.reason:
-                conta = motivos.setdefault(linha.reason, [linha.reason, 0, 0.0, None])
-                conta[1] += 1
-                conta[2] += linha.quantity
-
-            casadas += 1
-            chave = (linha.company, linha.sale_number, product_id)
-            repetida = entradas.get(chave)
-            if repetida is not None:
-                repetida.quantity += Decimal(str(linha.quantity))
-                continue
-            entradas[chave] = ProductDelivery(
-                id=uuid4(),
-                tenant_id=tenant_id,
-                kind=kind,
-                customer_id=customer_id,
-                product_id=product_id,
-                issued_on=linha.issued_on,
-                quantity=Decimal(str(linha.quantity)),
-                company=linha.company,
-                sale_number=linha.sale_number,
-                invoice=linha.invoice,
-                cfop=linha.cfop,
+        de, ate = package.first_day, package.last_day
+        for kind, (relato, entradas) in casados.items():
+            relato.previous_lines = await Repo.count_deliveries_in_period(
+                session, tenant_id, kind, de, ate
             )
+            if (
+                not package.force
+                and relato.previous_lines >= _FREIO_MINIMO
+                and len(entradas) * 2 < relato.previous_lines
+            ):
+                raise erp_sync.Recusado(
+                    409, "MUITAS_REMOCOES",
+                    f"O envio deixaria {_ORIGEM[kind]} de {de:%d/%m/%Y} a "
+                    f"{ate:%d/%m/%Y} com {len(entradas)} entradas, e hoje há "
+                    f"{relato.previous_lines}. Confira se a cópia do banco está "
+                    "completa; se estiver certo, rode de novo confirmando.",
+                )
 
-        quantidade = Decimal(
-            str(round(sum(float(e.quantity) for e in entradas.values()), 3))
-        )
-
-        if save:
-            await Repo.replace_deliveries(session, tenant_id, list(entradas.values()))
-            await Repo.add_invoice_import(
-                session,
+        recibos = []
+        for kind, (relato, entradas) in casados.items():
+            await Repo.replace_deliveries_in_period(
+                session, tenant_id, kind, de, ate, entradas
+            )
+            recibos.append(
                 InvoiceImport(
                     id=uuid4(),
                     tenant_id=tenant_id,
-                    user_id=user.id if user else None,
+                    user_id=None,
                     kind=kind,
-                    file_name=(file_name or "planilha.xlsx")[:255],
-                    first_day=lido.first_day,
-                    last_day=lido.last_day,
-                    total_lines=lido.total,
-                    matched_lines=casadas,
-                    matched_quantity=quantidade,
-                ),
-            )
-
-        desconhecidos = lambda faltas: sorted(  # noqa: E731
-            (
-                UnknownKeyResponse(
-                    code=codigo, name=nome or "—", document=documento,
-                    lines=linhas, quantity=Decimal(str(round(quanto, 3))),
+                    source=ImportSource.ERP.value,
+                    file_name="Sincronização com o ERP",
+                    first_day=de,
+                    last_day=ate,
+                    total_lines=relato.total_lines,
+                    matched_lines=relato.matched_lines,
+                    matched_quantity=relato.matched_quantity,
+                    sent_at=sent_at,
+                    copy_at=package.copy_at,
+                    report=relato.model_dump(mode="json"),
                 )
-                for codigo, (nome, linhas, quanto, documento) in faltas.items()
-            ),
-            key=lambda u: -u.lines,
-        )
+            )
+        await Repo.save_erp_receipts(session, tenant_id, recibos)
 
-        return InvoiceImportResponse(
-            kind=kind,
-            total_lines=lido.total,
-            usable_lines=len(lido.rows),
-            ignored_cfop=lido.ignored_cfop,
-            ignored_incomplete=lido.ignored_incomplete,
-            ignored_weight=lido.ignored_weight,
-            first_day=lido.first_day,
-            last_day=lido.last_day,
-            matched_lines=casadas,
-            matched_quantity=quantidade,
-            saved=save,
-            unknown_customers=desconhecidos(sem_cliente),
-            unknown_products=desconhecidos(sem_produto),
-            by_reason=desconhecidos(motivos),
+        relato_de = lambda kind: casados[kind][0] if kind in casados else None  # noqa: E731
+        return ErpSyncResponse(
+            received_at=datetime.now(timezone.utc),
+            copy_at=package.copy_at,
+            first_day=de,
+            last_day=ate,
+            sales=relato_de(DeliveryKind.VENDA.value),
+            gifts=relato_de(DeliveryKind.BRINDE.value),
         )
 
     @staticmethod
     async def list_invoice_imports(
         session: AsyncSession, tenant_id: UUID, kind: str,
     ) -> list[InvoiceImportRecordResponse]:
-        """As planilhas desta origem que já entraram, da mais recente para a
-        mais antiga."""
+        """Os recibos desta origem — sincronizações e, antes delas, planilhas —,
+        do mais recente para o mais antigo. Sem o relato: só o último o tem."""
         return [
-            InvoiceImportRecordResponse(
-                id=recibo.id,
-                kind=recibo.kind,
-                file_name=recibo.file_name,
-                imported_at=recibo.created_at,
-                imported_by=nome,
-                first_day=recibo.first_day,
-                last_day=recibo.last_day,
-                total_lines=recibo.total_lines,
-                matched_lines=recibo.matched_lines,
-                matched_quantity=recibo.matched_quantity,
-            )
+            _record_response(recibo, nome)
             for recibo, nome in await Repo.list_invoice_imports(session, tenant_id, kind)
         ]
+
+    @staticmethod
+    async def latest_erp_import(
+        session: AsyncSession, tenant_id: UUID, kind: str,
+    ) -> Optional[InvoiceImportRecordResponse]:
+        """O recibo da última sincronização desta origem, com o relato dela."""
+        recibo = await Repo.latest_erp_import(session, tenant_id, kind)
+        if recibo is None:
+            return None
+        resposta = _record_response(recibo, None)
+        if recibo.report:
+            resposta.report = InvoiceImportResponse.model_validate(recibo.report)
+        return resposta
 
     # ── Vencido retirado da loja ──────────────────────────────────────────
 

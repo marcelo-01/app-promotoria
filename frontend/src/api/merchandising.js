@@ -118,24 +118,21 @@ export const merchandisingApi = {
   // ── Administrador ─────────────────────────────────────────────────────
 
   /**
-   * Planilha de faturamento do ERP.
+   * Faturamento e brindes do ERP. As notas chegam sozinhas, do computador da
+   * empresa (`sync/sincronizar-faturamento-e-brindes.bat`); a tela só lê.
    *
-   * `preview` lê e relata sem gravar nada — é o que acontece ao anexar, para o
-   * administrador conferir antes de confirmar. `import` grava.
-   *
-   * Timeout largo: são milhares de linhas por arquivo, e o servidor ainda casa
-   * cada uma com o cadastro antes de responder.
+   * `latestErpImport` é a última sincronização da origem, com o relato do que
+   * entrou e do que ficou de fora (null se nenhuma chegou ainda).
+   * `listInvoiceImports` são os envios recebidos, do mais recente para o mais
+   * antigo — com as planilhas anexadas à mão antes da sincronização.
    */
-  async previewInvoices(file, kind = 'venda', onProgress) {
-    return enviarPlanilha(`/merchandising/invoices/preview?kind=${kind}`, file, onProgress)
+  async latestErpImport(kind = 'venda') {
+    const { data } = await apiClient.get('/merchandising/invoices/imports/latest', {
+      params: { kind },
+    })
+    return data
   },
 
-  async importInvoices(file, kind = 'venda', onProgress) {
-    return enviarPlanilha(`/merchandising/invoices/import?kind=${kind}`, file, onProgress)
-  },
-
-  /** As planilhas desta origem que já entraram, da mais recente para a mais
-   *  antiga — é o que responde "essa eu já mandei?". */
   async listInvoiceImports(kind = 'venda') {
     const { data } = await apiClient.get('/merchandising/invoices/imports', {
       params: { kind },
@@ -213,60 +210,6 @@ export const merchandisingApi = {
       product_ids: productIds,
     })
   },
-}
-
-/**
- * POST multipart da planilha, com o `detail` do servidor já legível.
- *
- * O timeout é de 10 minutos porque cobre o envio inteiro: dois meses de
- * faturamento são 25 MB, e numa conexão de 2 Mbps de subida só o upload passa
- * de 100 segundos. `onProgress` recebe `{ loaded, total }` durante o envio,
- * para a tela mostrar que a coisa anda.
- */
-async function enviarPlanilha(url, file, onProgress) {
-  const form = new FormData()
-  form.append('file', file)
-  try {
-    const { data } = await apiClient.post(url, form, {
-      timeout: 600000,
-      onUploadProgress: onProgress
-        ? (e) => onProgress({ loaded: e.loaded, total: e.total || file.size })
-        : undefined,
-    })
-    return data
-  } catch (error) {
-    // O erro cru fica no console: é o que dá para copiar e mandar quando a
-    // mensagem de tela não bastar para descobrir o que houve.
-    console.error('[planilha]', url, error)
-    throw new Error(motivoDaPlanilha(error))
-  }
-}
-
-/**
- * O que dizer quando a planilha não passou.
- *
- * "Não foi possível ler a planilha" servia para tudo — proxy que barrou o
- * tamanho, rede que caiu, servidor que demorou — e por isso não servia para
- * nada: quem lia não tinha como saber se era o arquivo ou o caminho até ele.
- */
-function motivoDaPlanilha(error) {
-  const detail = error.response?.data?.detail
-  if (typeof detail === 'string' && detail) return detail
-
-  if (error.code === 'ECONNABORTED') {
-    return 'O envio não terminou em 10 minutos. A conexão pode estar lenta '
-      + 'demais para esta planilha — tente de novo, ou exporte um período menor.'
-  }
-  if (!error.response) {
-    return 'A planilha não chegou ao servidor (a conexão caiu no meio do envio). '
-      + 'Confira a rede e tente de novo.'
-  }
-  const status = error.response.status
-  if (status === 413) {
-    return 'O arquivo é grande demais para o servidor aceitar. '
-      + 'Exporte um período menor.'
-  }
-  return `Não foi possível ler a planilha (o servidor respondeu ${status}).`
 }
 
 /**

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Optional, Sequence
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, delete, func, null, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.infrastructure.persistence.models.customer import Customer, CustomerStatus
 from app.infrastructure.persistence.models.customer_product import CustomerProduct
 from app.infrastructure.persistence.models.delivery import (
-    InvoiceImport, ProductDelivery, ProductRemoval,
+    ImportSource, InvoiceImport, ProductDelivery, ProductRemoval,
 )
 from app.infrastructure.persistence.models.product import Product
 from app.infrastructure.persistence.models.product_expiry import ProductExpiry
@@ -20,6 +20,7 @@ from app.infrastructure.persistence.models.promoter_customer import PromoterCust
 from app.infrastructure.persistence.models.stock_visit import (
     StockVisit, StockVisitItem, StockVisitStatus,
 )
+from app.infrastructure.persistence.models.tenant import Tenant, TenantStatus
 from app.infrastructure.persistence.models.turnover_factor import TurnoverFactor
 from app.infrastructure.persistence.models.user import User
 
@@ -290,46 +291,88 @@ class MerchandisingRepository:
             if documento and documento.strip()
         }
 
-    # Linhas por INSERT. Cada uma leva 13 parâmetros, e o protocolo do Postgres
-    # aceita 32 767 por comando — 2 000 linhas ficam em 26 mil, com folga.
+    # ── Sincronização com o ERP ───────────────────────────────────────────
+    #
+    # Nenhum destes métodos faz commit, menos o último (`save_erp_receipts`): o
+    # envio inteiro é uma transação só. Apagar o período e regravar as duas
+    # origens só vale junto — um erro no meio do caminho não pode deixar o
+    # período vazio.
+
+    @staticmethod
+    async def single_active_tenant_id(session: AsyncSession) -> Optional[UUID]:
+        """O tenant da empresa. A sincronização não tem usuário logado de onde
+        tirá-lo, e a chave é uma só no servidor: com mais de um tenant ativo, não
+        há como saber de qual o pacote é, e a resposta é None."""
+        query = select(Tenant.id).where(Tenant.status == TenantStatus.ACTIVE).limit(2)
+        ids = (await session.execute(query)).scalars().all()
+        return ids[0] if len(ids) == 1 else None
+
+    @staticmethod
+    async def last_erp_sent_at(session: AsyncSession, tenant_id: UUID) -> Optional[datetime]:
+        """A hora de envio do último pacote do ERP aceito."""
+        query = select(func.max(InvoiceImport.sent_at)).where(
+            InvoiceImport.tenant_id == tenant_id,
+            InvoiceImport.source == ImportSource.ERP.value,
+        )
+        return (await session.execute(query)).scalar()
+
+    @staticmethod
+    async def count_deliveries_in_period(
+        session: AsyncSession, tenant_id: UUID, kind: str, first_day: date, last_day: date,
+    ) -> int:
+        """Quantas entradas desta origem estão gravadas no período."""
+        query = select(func.count()).select_from(ProductDelivery).where(
+            ProductDelivery.tenant_id == tenant_id,
+            ProductDelivery.kind == kind,
+            ProductDelivery.issued_on >= first_day,
+            ProductDelivery.issued_on <= last_day,
+        )
+        return int((await session.execute(query)).scalar() or 0)
+
+    # Linhas por INSERT. Cada uma leva 11 parâmetros, e o protocolo do Postgres
+    # aceita 32 767 por comando — 2 000 linhas ficam em 22 mil, com folga.
     _LOTE_ENTREGAS = 2000
 
     @staticmethod
-    async def replace_deliveries(
-        session: AsyncSession, tenant_id: UUID, deliveries: list[ProductDelivery]
+    async def replace_deliveries_in_period(
+        session: AsyncSession, tenant_id: UUID, kind: str,
+        first_day: date, last_day: date, deliveries: list[dict],
     ) -> None:
-        """Grava as entradas, substituindo as que já tinham a mesma chave.
+        """Troca as entradas desta origem no período pelas do envio. Sem commit.
 
-        Anexar a planilha de ontem de novo não duplica nada: a chave é
-        (origem, empresa, nº venda, produto), e uma linha corrigida no ERP
-        sobrescreve a que estava aqui.
+        O período é apagado inteiro antes de gravar, e não só as linhas que o
+        envio traz: a nota cancelada no ERP não vem mais no pacote, e só some
+        daqui se o período inteiro for trocado. É também o que limpa as linhas
+        das planilhas anexadas antes, cuja chave não casa com a do ERP (a coluna
+        EMPRESA delas tem lixo — ver `ProductDelivery.company`).
 
-        É um upsert em lotes, e não DELETE + INSERT de tudo, por tamanho: dois
-        meses de faturamento são 60 mil linhas, e um único `DELETE ... IN` com
-        60 mil chaves estoura o Postgres ("stack depth limit exceeded") antes
-        de apagar qualquer coisa. O `ON CONFLICT` faz a troca linha a linha,
-        dentro do limite de parâmetros por comando, e numa transação só.
+        O DELETE é pelo período, um comando só, e não por chave: dois meses são
+        60 mil linhas, e um `DELETE ... IN` com 60 mil chaves estoura o Postgres
+        ("stack depth limit exceeded"). Os INSERT vão em lotes, dentro do limite
+        de parâmetros por comando.
+
+        O `ON CONFLICT` sobra para um caso só: a nota cuja data mudou no ERP e
+        atravessou o começo do período. A linha antiga ficou fora do DELETE, e a
+        nova, dentro do período, toma o lugar dela em vez de estourar a chave.
         """
+        await session.execute(
+            delete(ProductDelivery).where(
+                ProductDelivery.tenant_id == tenant_id,
+                ProductDelivery.kind == kind,
+                ProductDelivery.issued_on >= first_day,
+                ProductDelivery.issued_on <= last_day,
+            )
+        )
         if not deliveries:
             return
 
         tabela = ProductDelivery.__table__
+        agora = datetime.now(timezone.utc)
         for inicio in range(0, len(deliveries), MerchandisingRepository._LOTE_ENTREGAS):
             lote = deliveries[inicio:inicio + MerchandisingRepository._LOTE_ENTREGAS]
             comando = pg_insert(tabela).values([
-                {
-                    "id": d.id,
-                    "tenant_id": tenant_id,
-                    "kind": d.kind,
-                    "customer_id": d.customer_id,
-                    "product_id": d.product_id,
-                    "issued_on": d.issued_on,
-                    "quantity": d.quantity,
-                    "company": d.company,
-                    "sale_number": d.sale_number,
-                    "invoice": d.invoice,
-                    "cfop": d.cfop,
-                }
+                {**d, "tenant_id": tenant_id, "kind": kind,
+                 "created_at": agora, "updated_at": agora}
                 for d in lote
             ])
             comando = comando.on_conflict_do_update(
@@ -344,20 +387,41 @@ class MerchandisingRepository:
                 },
             )
             await session.execute(comando)
-        await session.commit()
 
     @staticmethod
-    async def add_invoice_import(session: AsyncSession, receipt: InvoiceImport) -> None:
-        """Guarda o recibo de uma planilha que acabou de entrar."""
-        session.add(receipt)
+    async def save_erp_receipts(
+        session: AsyncSession, tenant_id: UUID, receipts: list[InvoiceImport],
+    ) -> None:
+        """Guarda os recibos do envio e fecha a transação dele inteira.
+
+        O relato só fica no recibo mais recente de cada origem: o do envio
+        anterior descreve entradas que este acabou de trocar.
+
+        `null()`, e não `None`: numa coluna JSON o SQLAlchemy grava o `None` do
+        Python como o `null` do JSON, que não é NULL para o banco.
+        """
+        kinds = [r.kind for r in receipts]
+        if kinds:
+            await session.execute(
+                update(InvoiceImport)
+                .where(
+                    InvoiceImport.tenant_id == tenant_id,
+                    InvoiceImport.source == ImportSource.ERP.value,
+                    InvoiceImport.kind.in_(kinds),
+                    InvoiceImport.report.isnot(None),
+                )
+                .values(report=null())
+            )
+        session.add_all(receipts)
         await session.commit()
 
     @staticmethod
     async def list_invoice_imports(
         session: AsyncSession, tenant_id: UUID, kind: str, limit: int = 20,
     ) -> list[tuple[InvoiceImport, Optional[str]]]:
-        """As últimas planilhas desta origem que entraram, da mais recente
-        para a mais antiga, com o nome de quem anexou."""
+        """Os últimos recibos desta origem (sincronizações e, antes delas,
+        planilhas), do mais recente para o mais antigo, com o nome de quem
+        anexou a planilha."""
         query = (
             select(InvoiceImport, func.coalesce(User.full_name, User.email))
             .outerjoin(User, User.id == InvoiceImport.user_id)
@@ -366,6 +430,23 @@ class MerchandisingRepository:
             .limit(limit)
         )
         return [(recibo, nome) for recibo, nome in (await session.execute(query)).all()]
+
+    @staticmethod
+    async def latest_erp_import(
+        session: AsyncSession, tenant_id: UUID, kind: str,
+    ) -> Optional[InvoiceImport]:
+        """O recibo da última sincronização desta origem — o que tem o relato."""
+        query = (
+            select(InvoiceImport)
+            .where(
+                InvoiceImport.tenant_id == tenant_id,
+                InvoiceImport.kind == kind,
+                InvoiceImport.source == ImportSource.ERP.value,
+            )
+            .order_by(InvoiceImport.created_at.desc())
+            .limit(1)
+        )
+        return (await session.execute(query)).scalar()
 
     @staticmethod
     async def sum_deliveries_in_cycle(

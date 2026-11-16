@@ -1,30 +1,29 @@
+import asyncio
+import time
 from datetime import date, datetime, timezone
 from typing import Optional
 from uuid import UUID
 
 from fastapi import (
-    APIRouter, Depends, File, HTTPException, Query, UploadFile, status,
+    APIRouter, Depends, HTTPException, Query, Request, status,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.dependencies import require_roles
 from app.infrastructure.persistence.models.delivery import DeliveryKind
 from app.infrastructure.persistence.models.stock_visit import VisitType
 from app.infrastructure.persistence.session import get_db_session
-from app.merchandising import excel, pdf
+from app.merchandising import erp_sync, excel, pdf
 from app.merchandising.repository import MerchandisingRepository as Repo
 from app.merchandising.schemas import (
-    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate,
-    InvoiceImportRecordResponse, InvoiceImportResponse,
+    AssignmentUpdate, CountSheetResponse, CustomerMixUpdate, ErpSyncResponse,
+    InvoiceImportRecordResponse,
     OrderSuggestionResponse, ProductRemovalCreate, ProductRemovalResponse,
     PromoterCustomerResponse, StockHistoryResponse, StockInsightsResponse,
     StockVisitCreate, StockVisitListResponse, StockVisitResponse, StockVisitUpdate,
     TurnoverFactorUpdate, VisitPairListResponse,
 )
-
-# A planilha do ERP é grande, mas não é ilimitada: um arquivo muito maior que
-# isto é engano de anexo, e ler 200 MB de Excel derruba o contêiner.
-_MAX_PLANILHA = 40 * 1024 * 1024
 from app.merchandising.service import MerchandisingService
 
 router = APIRouter(prefix="/merchandising", tags=["merchandising"])
@@ -442,44 +441,73 @@ async def set_turnover_factor(
     )
 
 
-# ─── Planilha de faturamento (administrador) ──────────────────────────────────
+# ─── Faturamento e brindes do ERP ─────────────────────────────────────────────
 
-@router.post("/invoices/preview", response_model=InvoiceImportResponse)
-async def preview_invoices(
-    file: UploadFile = File(...),
-    kind: str = Query(default="venda", description="venda (faturamento) ou brinde"),
+@router.post("/erp/sync", response_model=ErpSyncResponse)
+async def receive_erp_sync(
+    request: Request,
     session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_ADMIN)),
 ):
-    """Lê a planilha e relata, SEM gravar nada.
+    """Recebe as notas de venda e de brinde do ERP, do computador da empresa.
 
-    É o que a tela faz ao anexar: mostra o período, quanto casou e o que ficou
-    de fora, para o administrador conferir antes de confirmar.
+    Não usa login: o pacote vem assinado com HMAC-SHA256 da hora do envio e do
+    hash do corpo, com a ERP_SYNC_KEY que só o servidor e o `sync/config.ini`
+    conhecem (`sync/sincronizar.py`, o mesmo esquema do BI Mais Vida e do EFFEX
+    Trade). Recusa vem com `detail = {code, message}`, que o script mostra.
     """
-    return await MerchandisingService.import_invoices(
-        session, context["tenant_id"], await _ler_planilha(file),
-        save=False, kind=_validate_kind(kind),
-    )
+    chave = settings.erp_sync_key.strip()
+    try:
+        if not chave:
+            raise erp_sync.Recusado(
+                503, "SINCRONIZACAO_DESLIGADA",
+                "Sincronização desligada: falta a ERP_SYNC_KEY no .env do servidor.",
+            )
+        if len(chave) < erp_sync.MIN_CHAVE:
+            raise erp_sync.Recusado(
+                503, "CHAVE_FRACA",
+                f"A ERP_SYNC_KEY do servidor tem menos de {erp_sync.MIN_CHAVE} "
+                "caracteres. Gere outra com: "
+                'python -c "import secrets; print(secrets.token_urlsafe(32))"',
+            )
+        corpo = await _ler_corpo(request, erp_sync.LIMITE_PACOTE)
+        enviado_em = erp_sync.conferir_assinatura(
+            chave,
+            request.headers.get(erp_sync.CABECALHO_DATA),
+            request.headers.get(erp_sync.CABECALHO_ASSINATURA),
+            corpo,
+            time.time(),
+        )
+        # Descompactar, ler e validar 100 mil itens é CPU: fora do event loop
+        pacote = await asyncio.to_thread(erp_sync.ler_pacote, corpo)
+        return await MerchandisingService.receive_erp_sync(session, pacote, enviado_em)
+    except erp_sync.Recusado as recusa:
+        raise HTTPException(
+            status_code=recusa.status,
+            detail={"code": recusa.codigo, "message": recusa.mensagem},
+        )
 
 
-@router.post("/invoices/import", response_model=InvoiceImportResponse)
-async def import_invoices(
-    file: UploadFile = File(...),
-    kind: str = Query(default="venda", description="venda (faturamento) ou brinde"),
-    session: AsyncSession = Depends(get_db_session),
-    context: dict = Depends(require_roles(*_ADMIN)),
-):
-    """Grava as entradas de mercadoria da planilha.
-
-    Idempotente pela chave (origem, empresa, nº do documento, item): anexar o
-    mesmo arquivo de novo não duplica, e uma linha corrigida no ERP sobrescreve
-    a anterior.
-    """
-    return await MerchandisingService.import_invoices(
-        session, context["tenant_id"], await _ler_planilha(file),
-        save=True, kind=_validate_kind(kind),
-        file_name=file.filename or "", user=context["user"],
-    )
+async def _ler_corpo(request: Request, limite: int) -> bytes:
+    """O corpo inteiro, sem passar de `limite`. Lido até o fim antes de
+    qualquer recusa por assinatura: a resposta precisa chegar a quem enviou."""
+    declarado = request.headers.get("content-length", "")
+    if declarado.isdigit() and int(declarado) > limite:
+        raise erp_sync.Recusado(
+            413, "PACOTE_GRANDE",
+            f"O pacote passa de {limite // (1024 * 1024)} MB.",
+        )
+    partes, total = [], 0
+    async for parte in request.stream():
+        total += len(parte)
+        if total > limite:
+            raise erp_sync.Recusado(
+                413, "PACOTE_GRANDE",
+                f"O pacote passa de {limite // (1024 * 1024)} MB.",
+            )
+        partes.append(parte)
+    if not total:
+        raise erp_sync.Recusado(400, "PACOTE_VAZIO", "O pedido chegou sem o pacote.")
+    return b"".join(partes)
 
 
 @router.get("/invoices/imports", response_model=list[InvoiceImportRecordResponse])
@@ -488,9 +516,24 @@ async def list_invoice_imports(
     session: AsyncSession = Depends(get_db_session),
     context: dict = Depends(require_roles(*_ADMIN)),
 ):
-    """As planilhas desta origem que já entraram — o que a tela lista embaixo
-    do campo de anexar."""
+    """Os recibos desta origem — sincronizações e, antes delas, as planilhas
+    anexadas à mão —, do mais recente para o mais antigo."""
     return await MerchandisingService.list_invoice_imports(
+        session, context["tenant_id"], _validate_kind(kind)
+    )
+
+
+@router.get(
+    "/invoices/imports/latest", response_model=Optional[InvoiceImportRecordResponse]
+)
+async def latest_erp_import(
+    kind: str = Query(default="venda", description="venda (faturamento) ou brinde"),
+    session: AsyncSession = Depends(get_db_session),
+    context: dict = Depends(require_roles(*_ADMIN)),
+):
+    """A última sincronização desta origem, com o relato: o que entrou, o que
+    ficou de fora e por quê. Nulo se nenhuma chegou ainda."""
+    return await MerchandisingService.latest_erp_import(
         session, context["tenant_id"], _validate_kind(kind)
     )
 
@@ -500,25 +543,5 @@ def _validate_kind(value: str) -> str:
         return DeliveryKind(value).value
     except ValueError:
         raise HTTPException(
-            status_code=422, detail="Planilha inválida. Use venda ou brinde."
+            status_code=422, detail="Origem inválida. Use venda ou brinde."
         )
-
-
-async def _ler_planilha(file: UploadFile) -> bytes:
-    """Confere extensão e tamanho antes de deixar o openpyxl abrir o arquivo."""
-    nome = (file.filename or "").lower()
-    if not nome.endswith((".xlsx", ".xlsm")):
-        raise HTTPException(
-            status_code=422,
-            detail="Envie a planilha em .xlsx — o formato antigo .xls não é lido.",
-        )
-
-    conteudo = await file.read()
-    if len(conteudo) > _MAX_PLANILHA:
-        raise HTTPException(
-            status_code=413,
-            detail="Planilha grande demais (limite de 40 MB). Exporte um período menor.",
-        )
-    if not conteudo:
-        raise HTTPException(status_code=422, detail="O arquivo chegou vazio.")
-    return conteudo

@@ -148,6 +148,15 @@ sed -i \
 grep -E '^(API_ENV|SECRET_KEY|POSTGRES_PASSWORD|DATABASE_PASSWORD|DATABASE_URL|APP_DOMAIN|FRONTEND_URL|VITE_API_URL|CADDY_TLS)=' .env
 ```
 
+Depois, a chave da sincronização com o ERP: a mesma que está em `[envio] chave`
+no `sync\config.ini` do computador da empresa (se ainda não houver, gere com
+`python3 -c "import secrets; print(secrets.token_urlsafe(32))"` e ponha nos dois
+lugares):
+
+```bash
+nano .env        # ERP_SYNC_KEY=<a chave do sync\config.ini>
+```
+
 O que não pode errar, e o sintoma de cada erro:
 
 | Variável | Valor | Se errar |
@@ -158,6 +167,7 @@ O que não pode errar, e o sintoma de cada erro:
 | `APP_DOMAIN` | o domínio, sem `https://` | O Caddy não sobe |
 | `FRONTEND_URL` | `https://<domínio>`, sem barra no fim | O download da planilha falha por CORS |
 | `CADDY_TLS` | vazio (já vem certo) | Preenchido com `tls internal`, cada celular passa a exigir a CA instalada à mão |
+| `ERP_SYNC_KEY` | a mesma do `sync\config.ini` do computador da empresa | O faturamento e os brindes do ERP não entram: a sincronização volta `Sincronização desligada` (vazia) ou `Assinatura inválida` (diferente) |
 
 O `.env` não está no Git e nunca deve estar. Ele existe só nesta máquina —
 **guarde uma cópia das senhas fora da VPS**, senão um dia elas se perdem junto
@@ -254,6 +264,12 @@ cd /opt/app-promotoria && git pull && make prod-up
 O `--build` refaz as imagens e as migrações pendentes sobem junto. Banco
 (`estoque_pg_data`), fotos (`estoque_uploads`) e certificados (`caddy_data`)
 estão em volumes e sobrevivem ao redeploy.
+
+**Na atualização que trouxe a sincronização com o ERP** (nov/2026), antes do
+`make prod-up`, acrescente ao `.env` a `ERP_SYNC_KEY` do passo 7 — o `.env` de uma
+VPS já instalada não tem a linha. Depois, no computador da empresa, dois cliques em
+`sync\sincronizar-faturamento-e-brindes.bat`: o primeiro envio troca os 120 dias
+inteiros, inclusive as linhas que tinham vindo das planilhas.
 
 ## Hospedar outros aplicativos no mesmo domínio
 

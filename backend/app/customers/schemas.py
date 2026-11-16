@@ -12,9 +12,9 @@ from uuid import UUID
 from pydantic import BaseModel, Field, field_validator
 
 
-# CNPJ/CPF guardado só com dígitos — é assim que a planilha de faturamento é
-# comparada com o cadastro, e '13.781.008/0001-84' e '13781008000184' não podem
-# ser dois clientes diferentes.
+# CNPJ/CPF guardado só com dígitos — é assim que as notas do ERP são comparadas
+# com o cadastro, e '13.781.008/0001-84' e '13781008000184' não podem ser dois
+# clientes diferentes.
 def _so_digitos(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None

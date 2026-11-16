@@ -23,3 +23,7 @@ backups/
 # de onde não sai mais.
 *.xlsx
 *.xlsm
+
+# Sincronização com o ERP: o config.ini tem a senha do banco do ERP e a chave de
+# envio (a mesma ERP_SYNC_KEY do servidor). O log fica em *.log, acima.
+sync/config.ini
