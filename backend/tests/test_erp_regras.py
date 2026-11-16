@@ -46,6 +46,65 @@ def test_brinde_aceita_so_remessa_ao_cliente():
     assert lido.rows[0].reason == "BRINDE - DANIFICADO NO CLIENTE"
 
 
+_TROCA = [
+    "BRINDE - VENCIDO",
+    "BRINDE - DANIFICADO NO CLIENTE",
+    "BRINDE - DANIFICADO NA LOGÍSTICA",
+    "BRINDE - DANIFICADO, PROBLEMA NA PRODUÇÃO",
+]
+_OUTROS = ["DOAÇÃO", "BRINDE - DEGUSTAÇÃO", "BRINDE - PAGAMENTO DE CONTRATO", None]
+
+
+def _brindes_com_motivos(motivos: list) -> dict:
+    dados = pacote()
+    modelo = dados["gifts"][0]
+    dados["gifts"] = [
+        {**modelo, "number": 80000 + i, "reason": motivo, "items": [_item(9616, "5910", 2)]}
+        for i, motivo in enumerate(motivos)
+    ]
+    return dados
+
+
+def test_brinde_entra_so_se_for_troca_de_vencido_ou_danificado():
+    lido = _lido(_brindes_com_motivos(_TROCA + _OUTROS), "gifts", "brinde")
+    assert [r.reason for r in lido.rows] == _TROCA
+    assert lido.ignored_reason == 4
+    assert lido.ignored_reasons == {
+        "DOAÇÃO": [1, 2.0],
+        "BRINDE - DEGUSTAÇÃO": [1, 2.0],
+        "BRINDE - PAGAMENTO DE CONTRATO": [1, 2.0],
+        "(sem motivo)": [1, 2.0],
+    }
+
+
+def test_motivo_novo_de_vencido_ou_danificado_entra_sem_mexer_no_codigo():
+    # Pelo radical, sem caixa e sem acento: o feminino e um motivo novo entram
+    assert invoices.aceita_motivo("brinde - produto vencido")
+    assert invoices.aceita_motivo("BRINDE - EMBALAGEM DANIFICADA")
+    assert invoices.aceita_motivo("DEVOLUÇÃO IMPRÓPRIA - DANIFICADO NA LOGÍSTICA")
+    assert not invoices.aceita_motivo("BRINDE - DEGUSTAÇÃO")
+    assert not invoices.aceita_motivo("")
+    assert not invoices.aceita_motivo(None)
+
+
+def test_venda_nao_passa_pelo_filtro_de_motivo():
+    dados = pacote()
+    dados["sales"][0]["reason"] = "DOAÇÃO"
+    lido = _lido(dados)
+    assert len(lido.rows) == 2 and lido.ignored_reason == 0
+
+
+def test_relato_do_brinde_traz_o_que_ficou_de_fora_por_motivo():
+    lido = _lido(_brindes_com_motivos(_TROCA + _OUTROS + ["DOAÇÃO"]), "gifts", "brinde")
+    relato, entradas = svc._casar(
+        lido, "brinde", {"A170003": uuid4()}, {"44555666000199": uuid4()}
+    )
+    assert relato.ignored_reason == 5
+    assert [(m.code, m.lines) for m in relato.ignored_by_reason][0] == ("DOAÇÃO", 2)
+    assert {m.code for m in relato.by_reason} == set(_TROCA)
+    assert len(entradas) == 4
+
+
 def test_item_sem_pecas_ou_produto_sem_codigo_fica_de_fora():
     dados = pacote()
     dados["products"][2]["code"] = None

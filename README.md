@@ -142,8 +142,10 @@ cópia do banco do ERP (Firebird) e manda para o app.
   no último dia com venda na cópia, com as peças de cada produto (`NUM_PECAS`), o
   CFOP, a empresa e o motivo do brinde.
 - **O que entra:** as regras das planilhas que a sincronização substituiu. No
-  faturamento, CFOP de saída (5xxx e 6xxx); no brinde, só a remessa ao cliente
-  (5910 e 6910), sem transferência, retorno e perda. O cliente casa pelo **CNPJ** e
+  faturamento, CFOP de saída (5xxx e 6xxx). No brinde, só a remessa ao cliente
+  (5910 e 6910), sem transferência, retorno e perda, e dela só a **troca de
+  vencido e de danificado** — doação, degustação, pagamento de contrato e brinde
+  sem motivo ficam de fora. O cliente casa pelo **CNPJ** e
   o produto pelo **código do ERP**; o que não casa vira a lista de tarefas da tela
   **Faturamento do ERP**, que também diz se os números estão em dia.
 - **Como grava:** cada envio troca as entradas do período inteiro, numa transação

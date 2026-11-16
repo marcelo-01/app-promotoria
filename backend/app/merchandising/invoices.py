@@ -2,7 +2,8 @@
 
 São duas origens, com regras próprias: o FATURAMENTO (o que foi vendido) e os
 BRINDES (o que foi enviado sem cobrar). Na conta as duas se somam — mercadoria é
-mercadoria, chegou é chegou —, mas cada uma tem o seu filtro de CFOP.
+mercadoria, chegou é chegou —, mas cada uma tem o seu filtro de CFOP, e o brinde
+também o de motivo: só a troca de vencido e de danificado volta para a gôndola.
 
 As notas chegam do computador da empresa, que lê a cópia do banco do ERP
 (`sync/sincronizar.py`) e manda o pacote que `erp_sync.py` confere. Até
@@ -45,6 +46,7 @@ estimativa continua necessária e a coleta do promotor, insubstituível.
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Mapping, Optional, Sequence
@@ -63,17 +65,22 @@ CFOP_VENDA = ("5", "6")
 # BRINDE: a tabela de brindes do ERP NÃO é só de brindes. Ela mistura remessa ao
 # cliente com transferência entre filiais, retorno de mercadoria, consumo
 # interno e baixa por perda — e nenhuma dessas últimas põe mercadoria no estoque
-# de um cliente.
-#
-# O corte é pelo CFOP, e não pelo motivo: 5910 e 6910 são exatamente "remessa em
-# bonificação, doação ou brinde", saída da empresa para o cliente. O motivo é
-# cadastro de gente e ganha opção nova; CFOP é código fiscal. Em outubro/2026 o
-# CFOP deixou entrar BRINDE - VENCIDO, os três BRINDE - DANIFICADO, DOAÇÃO,
-# BRINDE - DEGUSTAÇÃO e BRINDE - PAGAMENTO DE CONTRATO, e deixou de fora
-# RETORNO, TRANSFERÊNCIA, CONSUMO INTERNO e PERDA. A planilha que se anexava
-# antes já vinha filtrada pelos quatro primeiros motivos; os outros três
-# aparecem na quebra por motivo da tela, para quem quiser conferir.
+# de um cliente. O primeiro corte é pelo CFOP: 5910 e 6910 são exatamente
+# "remessa em bonificação, doação ou brinde", saída da empresa para o cliente.
 CFOP_BRINDE = ("5910", "6910")
+
+# O segundo corte do brinde é pelo motivo: entra só a TROCA, o brinde que repõe
+# mercadoria vencida ou danificada — é ela que volta para a prateleira e vira
+# venda. Doação, degustação e pagamento de contrato saem com o mesmo CFOP e não
+# entram (decisão de 16/11/2026); brinde sem motivo também não. Em outubro/2026
+# o CFOP deixava passar, além dos de troca, DOAÇÃO, BRINDE - DEGUSTAÇÃO e BRINDE -
+# PAGAMENTO DE CONTRATO, que a planilha anexada antes já vinha sem.
+#
+# O motivo é o nome no cadastro do ERP (MOTIVODEVOLUCAO.NOME), e a comparação é
+# pelo radical, sem acento e sem caixa: entram BRINDE - VENCIDO e os três BRINDE
+# - DANIFICADO (no cliente, na logística, problema na produção), e um motivo novo
+# de vencido ou danificado que alguém cadastrar entra junto, sem mexer aqui.
+MOTIVOS_BRINDE = ("VENCID", "DANIFICAD")
 
 
 def aceita_cfop(kind: str, cfop: str) -> bool:
@@ -81,6 +88,12 @@ def aceita_cfop(kind: str, cfop: str) -> bool:
     if kind == "brinde":
         return cfop in CFOP_BRINDE
     return cfop.startswith(CFOP_VENDA)
+
+
+def aceita_motivo(motivo: Optional[str]) -> bool:
+    """O brinde é troca de vencido ou de danificado?"""
+    chave = unicodedata.normalize("NFKD", motivo or "").encode("ascii", "ignore").decode().upper()
+    return any(radical in chave for radical in MOTIVOS_BRINDE)
 
 
 def _digitos(valor: Optional[str]) -> str:
@@ -120,6 +133,10 @@ class Parsed:
     rows: list[Row] = field(default_factory=list)
     total: int = 0                       # itens de nota lidos
     ignored_cfop: int = 0                # o que não é remessa ao cliente
+    # Brinde de outro motivo que não troca de vencido ou danificado, e o que
+    # ficou de fora de cada um: motivo → [itens, peças]
+    ignored_reason: int = 0
+    ignored_reasons: dict[str, list] = field(default_factory=dict)
     ignored_incomplete: int = 0          # sem peças ou sem código de produto
 
 
@@ -133,9 +150,10 @@ def from_package(
 ) -> Parsed:
     """Notas do pacote → linhas de entrada de mercadoria aproveitáveis.
 
-    `kind` escolhe o filtro de CFOP: `'venda'` para o faturamento, `'brinde'`
-    para os brindes. Cada nota já vem com um item por produto e CFOP; o mesmo
-    produto em dois CFOPs vira duas linhas aqui, e o serviço as soma na chave.
+    `kind` escolhe os filtros: `'venda'` para o faturamento (o CFOP),
+    `'brinde'` para os brindes (o CFOP e o motivo). Cada nota já vem com um item
+    por produto e CFOP; o mesmo produto em dois CFOPs vira duas linhas aqui, e o
+    serviço as soma na chave.
 
     As referências (cliente e produto de cada nota) já foram conferidas em
     `erp_sync.conferir_pacote`: aqui elas existem.
@@ -149,6 +167,15 @@ def from_package(
             cfop = (item.cfop or "").strip()
             if not aceita_cfop(kind, cfop):
                 saida.ignored_cfop += 1
+                continue
+
+            if kind == "brinde" and not aceita_motivo(nota.reason):
+                saida.ignored_reason += 1
+                fora = saida.ignored_reasons.setdefault(
+                    _texto(nota.reason) or "(sem motivo)", [0, 0.0]
+                )
+                fora[0] += 1
+                fora[1] += max(float(item.pieces), 0.0)
                 continue
 
             produto = products[item.product]

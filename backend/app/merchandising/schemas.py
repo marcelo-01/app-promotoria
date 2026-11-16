@@ -125,6 +125,12 @@ class InvoiceImportResponse(BaseModel):
     # remessa ao cliente: transferência entre filiais, retorno, consumo interno,
     # baixa por perda.
     ignored_cfop: int = 0
+    # Só nos brindes: o que passou pelo CFOP mas não é troca de vencido ou de
+    # danificado (doação, degustação, pagamento de contrato, sem motivo), e a
+    # quebra por motivo do que ficou de fora — de todas as lojas do ERP, como o
+    # filtro de CFOP, e não só das deste app.
+    ignored_reason: int = 0
+    ignored_by_reason: List[UnknownKeyResponse] = []
     # Sem peças (o item pesado sem a contagem de peças) ou sem código de produto
     ignored_incomplete: int = 0
 

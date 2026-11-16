@@ -103,6 +103,10 @@
               {{ formatQtd(relato.ignored_cfop) }} item(ns) ficaram de fora pelo
               CFOP ({{ origemAtual.cfop }}).
             </span>
+            <span v-if="relato.ignored_reason">
+              {{ formatQtd(relato.ignored_reason) }} item(ns) de brinde de outro
+              motivo também — só entra a troca de vencido e de danificado.
+            </span>
             <span v-if="relato.ignored_incomplete">
               {{ formatQtd(relato.ignored_incomplete) }} sem a contagem de peças.
             </span>
@@ -130,17 +134,25 @@
         </q-card-section>
       </q-card>
 
-      <!-- ── O que entrou, por motivo (só os brindes trazem) ─────────────── -->
-      <q-card v-if="relato.by_reason?.length" flat bordered class="q-mb-md">
+      <!-- ── Brindes por motivo: o que entrou e o que o motivo deixou de fora ── -->
+      <q-card
+        v-if="relato.by_reason?.length || relato.ignored_by_reason?.length"
+        flat bordered class="q-mb-md"
+      >
         <q-card-section class="q-pb-none">
           <div class="text-subtitle2 text-weight-bold">Brindes por motivo</div>
           <div class="text-caption text-grey-7">
-            O que passou pelo filtro de CFOP. Confira aqui se algum motivo entrou
-            (ou ficou de fora) indevidamente.
+            Só entra o brinde de troca — vencido ou danificado. Doação,
+            degustação, pagamento de contrato e brinde sem motivo saem com o mesmo
+            CFOP, mas não viram mercadoria na gôndola. Confira aqui se algum
+            motivo entrou (ou ficou de fora) indevidamente.
           </div>
         </q-card-section>
         <q-list separator dense>
-          <q-item v-for="m in relato.by_reason" :key="m.code">
+          <q-item-label v-if="relato.by_reason?.length" header class="q-py-sm">
+            Entraram, nas lojas deste app
+          </q-item-label>
+          <q-item v-for="m in relato.by_reason" :key="`entrou-${m.code}`">
             <q-item-section>
               <q-item-label>{{ m.code }}</q-item-label>
             </q-item-section>
@@ -148,6 +160,18 @@
               <q-item-label class="text-weight-bold text-primary">
                 {{ formatQtd(m.quantity) }} pç
               </q-item-label>
+              <q-item-label caption>{{ m.lines }} item(ns)</q-item-label>
+            </q-item-section>
+          </q-item>
+          <q-item-label v-if="relato.ignored_by_reason?.length" header class="q-py-sm">
+            Não entram, em todas as lojas do ERP
+          </q-item-label>
+          <q-item v-for="m in relato.ignored_by_reason" :key="`fora-${m.code}`">
+            <q-item-section>
+              <q-item-label class="text-grey-8">{{ m.code }}</q-item-label>
+            </q-item-section>
+            <q-item-section side class="text-right">
+              <q-item-label class="text-grey-7">{{ formatQtd(m.quantity) }} pç</q-item-label>
               <q-item-label caption>{{ m.lines }} item(ns)</q-item-label>
             </q-item-section>
           </q-item>

@@ -191,6 +191,17 @@ def _casar(
         total_lines=lido.total,
         usable_lines=len(lido.rows),
         ignored_cfop=lido.ignored_cfop,
+        ignored_reason=lido.ignored_reason,
+        ignored_by_reason=sorted(
+            (
+                UnknownKeyResponse(
+                    code=motivo, name=motivo, lines=linhas,
+                    quantity=Decimal(str(round(pecas, 3))),
+                )
+                for motivo, (linhas, pecas) in lido.ignored_reasons.items()
+            ),
+            key=lambda u: -u.lines,
+        ),
         ignored_incomplete=lido.ignored_incomplete,
         first_day=lido.first_day,
         last_day=lido.last_day,

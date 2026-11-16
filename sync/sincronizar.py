@@ -8,9 +8,9 @@ servidor e nunca trafega.
 Vão as notas não canceladas a cliente dos DIAS dias que terminam no último dia com venda na cópia, com as peças de cada
 produto (NUM_PECAS, a coluna N. PEÇAS das planilhas), o CFOP de cada item, a empresa e, no brinde, o motivo: o que as
 planilhas de faturamento e de brindes traziam, lido das tabelas de onde o relatório do ERP o tirava. O servidor aplica
-as regras de sempre (o CFOP de venda e o de brinde), casa cada nota com o cliente pelo CNPJ e cada item com o produto
-pelo código do ERP, e troca as entradas do período inteiro pelas do pacote: a nota cancelada ou corrigida no ERP some
-ou muda no app no envio seguinte. Se a leitura dos brindes (ou a das vendas) falhar, a outra vai assim mesmo, e o app
+as regras (o CFOP de venda e o de brinde e, no brinde, só a troca de vencido e de danificado), casa cada nota com o
+cliente pelo CNPJ e cada item com o produto pelo código do ERP, e troca as entradas do período inteiro pelas do pacote:
+a nota cancelada ou corrigida no ERP some ou muda no app no envio seguinte. Se a leitura dos brindes (ou a das vendas) falhar, a outra vai assim mesmo, e o app
 fica com o que já tinha da que falhou.
 
 Uso: dois cliques em sincronizar-faturamento-e-brindes.bat, ou: python sincronizar.py [--sem-enviar] [--forcar]
@@ -57,9 +57,10 @@ CONSULTA_VENDAS = ("SELECT v.ID_VENDA, CAST(v.DATA AS DATE), v.NOTAFISCAL, v.ID_
                    "WHERE v.DATA >= ? AND v.DATA < ? AND v.DATACANCELAMENTO IS NULL AND v.TIPOCLIENTE = 'CLIENTE' "
                    "AND l.ID_ITEM IS NOT NULL "
                    "GROUP BY 1, 2, 3, 4, 5, 6, 7")
-# Os brindes, com o motivo. Vão todos os CFOPs: o servidor separa a remessa ao cliente (5910 e 6910) da transferência,
-# do retorno e da perda, e conta o que deixou de fora. Aqui o brinde já vem com a contagem de peças de verdade, que a
-# planilha de brindes não trazia (ela dava peso ÷ peso da peça: 6,405 peças).
+# Os brindes, com o motivo. Vão todos os CFOPs e motivos: o servidor separa a remessa ao cliente (5910 e 6910) da
+# transferência, do retorno e da perda e, dela, aceita só a troca de vencido e de danificado (doação, degustação e
+# pagamento de contrato ficam de fora), e conta o que deixou de fora. Aqui o brinde já vem com a contagem de peças de
+# verdade, que a planilha de brindes não trazia (ela dava peso ÷ peso da peça: 6,405 peças).
 CONSULTA_BRINDES = ("SELECT b.ID_BRINDE, CAST(b.DATA AS DATE), b.NOTAFISCAL, b.ID_EMPRESA, b.ID_CLIENTE, "
                     "b.ID_MOTIVO, l.ID_ITEM, l.CFOP, SUM(l.NUM_PECAS) "
                     "FROM BRINDES b JOIN LISTABRINDE l ON l.ID_BRINDE = b.ID_BRINDE "
@@ -303,18 +304,24 @@ def relato_origem(rotulo: str, r: dict | None) -> tuple[list[str], str]:
     fora = []
     if r.get("ignored_cfop"):
         fora.append(f"{numero(r['ignored_cfop'])} pelo CFOP")
+    if r.get("ignored_reason"):
+        fora.append(f"{numero(r['ignored_reason'])} pelo motivo")
     if r.get("ignored_incomplete"):
         fora.append(f"{numero(r['ignored_incomplete'])} sem peças")
     if fora:
-        linhas.append(f"    Itens que ficaram de fora: {' e '.join(fora)}.")
+        linhas.append(f"    Itens que ficaram de fora: {', '.join(fora[:-1])}{' e ' if len(fora) > 1 else ''}{fora[-1]}.")
+    motivos_fora = r.get("ignored_by_reason") or []
+    if motivos_fora:
+        linhas.append("    Motivos que não entram (só a troca de vencido e danificado entra): "
+                      + "; ".join(f"{m['code']} ({contagem(m['lines'], 'item', 'itens')})" for m in motivos_fora))
     sem_p, sem_c = r.get("unknown_products_total", 0), r.get("unknown_customers_total", 0)
     if sem_p or sem_c:
         linhas.append(f"    Sem cadastro no app: {contagem(sem_p, 'produto', 'produtos')} e "
                       f"{contagem(sem_c, 'cliente', 'clientes')} (a lista está na tela Faturamento do ERP).")
     motivos = r.get("by_reason") or []
     if motivos:
-        linhas.append("    Por motivo: " + "; ".join(f"{m['code']} ({numero(float(m['quantity']))} peças)"
-                                                     for m in motivos))
+        linhas.append("    Entraram por motivo: " + "; ".join(f"{m['code']} ({numero(float(m['quantity']))} peças)"
+                                                              for m in motivos))
     log = (f"{rotulo.lower()} {r['matched_lines']} itens ({pecas:.0f} pç, {r.get('matched_customers', 0)} clientes, "
            f"havia {r.get('previous_lines', 0)})")
     return linhas, log
